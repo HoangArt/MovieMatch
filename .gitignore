@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Môi trường ảo
+.venv/
+venv/
+env/
+ENV/
+
+# Biến môi trường và bí mật
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+.streamlit/secrets.*.toml
+
+# Cơ sở dữ liệu
+*.db
+*.sqlite
+*.sqlite3
+users.db
+
+# Mô hình AI đã lưu
+models/
+*.pkl
+*.pickle
+*.joblib
+*.keras
+*.h5
+*.model
+
+# Log và file tạm
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Cài đặt IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
