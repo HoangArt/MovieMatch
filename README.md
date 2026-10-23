@@ -57,7 +57,6 @@ MovieMatch/
 │       └── README.txt
 ├── pages_ui/
 │   ├── auth.py                     # Đăng ký và đăng nhập
-│   ├── common.py                   # Thành phần hiển thị và hàm dùng chung
 │   ├── data_explorer.py            # Khám phá các bảng dữ liệu
 │   ├── favorite_movies.py          # Chọn và quản lý phim yêu thích
 │   ├── home.py                     # Trang chủ
@@ -66,14 +65,13 @@ MovieMatch/
 │   ├── page_transition.py          # Overlay khi chuyển trang
 │   ├── recommendations.py          # Giao diện gợi ý phim
 │   └── search.py                   # Tìm kiếm phim
-├── services/
-│   └── tmdb_api.py                 # Gọi TMDB và tải poster theo lô
 └── src/
+    ├── common.py                  # Thành phần hiển thị và hàm dùng chung
     ├── content_recommender.py     # TF-IDF và cosine similarity
     ├── data.py                    # Đọc/tải bộ dữ liệu MovieLens
     ├── database.py                # SQLite và thao tác dữ liệu tài khoản
     ├── recommender_models.py      # User/Item KNN, SVD và Keras Embedding
-    └── tmdb.py                    # Thông tin chi tiết phim từ TMDB
+    └── tmdb.py                    # Thông tin chi tiết phim từ TMDB và tải poster theo lô
 ```
 
 ## Cài đặt và chạy

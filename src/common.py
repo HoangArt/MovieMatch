@@ -1,22 +1,74 @@
-from pathlib import Path
-import re
-
-import pandas as pd
 import streamlit as st
-
-from src.tmdb import get_movie_poster
-
+import re
+import pandas as pd
+import zipfile
+import requests
+from pathlib import Path
+from io import BytesIO
 
 # ==========================================
 # 1. ĐƯỜNG DẪN DỮ LIỆU
 # ==========================================
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-DATA_DIR = PROJECT_ROOT / "data" / "ml-latest-small"
+DATA_DIR = PROJECT_ROOT / "data"
+
+DATASET_DIR = DATA_DIR / "ml-latest-small"
+
+MOVIES_FILE = DATASET_DIR / "movies.csv"
+RATINGS_FILE = DATASET_DIR / "ratings.csv"
+TAGS_FILE = DATASET_DIR / "tags.csv"
+LINKS_FILE = DATASET_DIR / "links.csv"
+
+DATASET_URL = (
+    "https://files.grouplens.org/datasets/movielens/ml-latest-small.zip"
+)
+
+
+# =========================================
+# 2. TẢI DỮ LIỆU NẾU CÁC TỆP KHÔNG TỒN TẠI
+# =========================================
+def ensure_dataset_exists():
+    if MOVIES_FILE.exists() and RATINGS_FILE.exists() and TAGS_FILE.exists() and LINKS_FILE.exists():
+        return
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    response = requests.get(DATASET_URL, timeout=60)
+    response.raise_for_status()
+
+    with zipfile.ZipFile(BytesIO(response.content)) as zip_file:
+        zip_file.extractall(DATA_DIR)
+
+    if not MOVIES_FILE.exists() or not RATINGS_FILE.exists() or not TAGS_FILE.exists() or not LINKS_FILE.exists():
+        raise FileNotFoundError(
+            "Không tìm thấy một hoặc nhiều tệp dữ liệu."
+            " Hãy kiểm tra lại thư mục dữ liệu."
+        )
 
 
 # ==========================================
-# 2. ĐỌC DỮ LIỆU MOVIELENS
+# 3. ĐỌC DỮ LIỆU TỪ CÁC TỆP CSV
+# ==========================================
+def load_movielens_data():
+    ensure_dataset_exists()
+
+    movies = pd.read_csv(MOVIES_FILE)
+    ratings = pd.read_csv(RATINGS_FILE)
+    tags = pd.read_csv(TAGS_FILE)
+    links = pd.read_csv(LINKS_FILE)
+
+    # Chuyển đổi cột 'timestamp' trong ratings_df sang định dạng datetime
+    ratings['timestamp'] = pd.to_datetime(ratings['timestamp'], unit='s')
+    tags['timestamp'] = pd.to_datetime(tags['timestamp'], unit='s')
+
+    # Ghép điểm đánh giá với tên và thể loại phim
+    ratings_with_movies = ratings.merge(movies, on='movieId', how='left')
+
+    return movies, ratings, tags, links, ratings_with_movies
+
+# ==========================================
+# 4. ĐỌC DỮ LIỆU MOVIELENS
 # ==========================================
 @st.cache_data(
     ttl=3600,
@@ -32,15 +84,11 @@ def context():
         links: ánh xạ ID phim
     """
 
-    movies_path = DATA_DIR / "movies.csv"
-    ratings_path = DATA_DIR / "ratings.csv"
-    links_path = DATA_DIR / "links.csv"
+    movies_path = MOVIES_FILE
+    ratings_path = RATINGS_FILE
+    links_path = LINKS_FILE
 
-    for path in (
-        movies_path,
-        ratings_path,
-        links_path,
-    ):
+    for path in (movies_path, ratings_path, links_path):
         if not path.exists():
             raise FileNotFoundError(
                 f"Không tìm thấy file dữ liệu: {path}"
@@ -104,8 +152,62 @@ def context():
     return movies, ratings, links
 
 
+# =========================================
+# 5. LẤY DỮ LIỆU PHIM
+# =========================================
+@st.cache_data
+def load_movie_data():
+    """
+    Đọc dữ liệu từ data.py và bổ sung thông tin
+    thống kê cho từng bộ phim.
+    """
+    # Đọc dữ liệu MovieLens
+        # movies: Danh sách phim, bao gồm movieId, title, genres
+        # ratings: Các đánh giá của người dùng, gồm userId, movieId, rating và timestamp
+        # tags: Các nhãn do người dùng gán cho phim
+        # links: Bảng ánh xạ movieId sang imdbId và tmdbId
+        # ratings_with_movies: Bảng ratings đã được ghép với thông tin phim
+    movies, ratings, tags, links, ratings_with_movies = load_movielens_data()
+
+    # Bước 2: Tính số lượt đánh giá và điểm trung bình cho từng phim
+    rating_stats = (
+        ratings.groupby("movieId")
+        .agg(
+            # rating_count: tổng số lượt đánh giá.
+            rating_count=("rating", "count"),
+            # avg_rating: điểm trung bình của phim.
+            avg_rating=("rating", "mean"),
+        )
+        .reset_index()
+    )
+
+    # Bước 3: Ghép thống kê đánh giá vào danh sách phim
+    # Dùng left join để giữ lại cả những phim chưa có lượt đánh giá
+    movie_data = movies.merge(rating_stats, on="movieId", how="left")
+
+    # Bước 4: Ghép mã TMDB vào danh sách phim
+    movie_data = movie_data.merge(
+        links[["movieId", "tmdbId"]], on="movieId", how="left")
+
+    # Bước 5: Xử lý những phim chưa có đánh giá
+    # Nếu phim chưa có đánh giá thì rating_count = 0
+    movie_data["rating_count"] = (
+        movie_data["rating_count"].fillna(0).astype(int))
+
+    # Bước 6: Chuẩn hóa kiểu dữ liệu của tmdbId
+    # errors="coerce" chuyển giá trị không hợp lệ thành NaN.
+    movie_data["tmdbId"] = pd.to_numeric(movie_data["tmdbId"], errors="coerce")
+
+    # Bước 7: Trích xuất năm phát hành từ tên phim
+    # Nếu tên phim không có năm ở cuối thì giá trị year sẽ là NaN.
+    movie_data["year"] = pd.to_numeric(
+        movie_data["title"].str.extract(r"\((\d{4})\)\s*$")[0], errors="coerce")
+
+    # Trả về bảng dữ liệu phim đã xử lý
+    return movie_data
+
 # ==========================================
-# 3. TÍNH ĐIỂM ĐÁNH GIÁ CHO PHIM
+# 6. TÍNH ĐIỂM ĐÁNH GIÁ CHO PHIM
 # ==========================================
 @st.cache_data(
     ttl=1800,
@@ -175,7 +277,7 @@ def enrich(movies, ratings):
 
 
 # ==========================================
-# 4. DỊCH TÊN THỂ LOẠI
+# 7. DỊCH TÊN THỂ LOẠI
 # ==========================================
 GENRE_TRANSLATIONS = {
     "Action": "Hành động",
@@ -225,7 +327,7 @@ def translate_genres(genres):
 
 
 # ==========================================
-# 5. CHUẨN HÓA TÊN PHIM
+# 8. CHUẨN HÓA TÊN PHIM
 # ==========================================
 def format_movie_title(title):
     """
@@ -259,7 +361,27 @@ def format_movie_title(title):
 
 
 # ==========================================
-# 6. HIỂN THỊ DANH SÁCH PHIM
+# 9. RÚT NGẮN NỘI DUNG
+# ==========================================
+def shorten_text(text, max_chars=20):
+    """
+    Rút gọn văn bản nếu vượt quá số ký tự cho phép.
+    Ví dụ: Shawshank Redemption, The (1994) -> Shawshank Redemption...
+    """
+
+    if pd.isna(text):
+        return ""
+
+    text = str(text).strip()
+
+    if len(text) <= max_chars:
+        return text
+
+    return text[:max_chars - 3].rstrip() + "..."
+
+
+# ==========================================
+# 10. HIỂN THỊ THÔNG TIN CHI TIẾT PHIM
 # ==========================================
 def open_movie_detail(movie_id):
     """Lưu phim được chọn và chuyển sang trang chi tiết."""
@@ -269,20 +391,14 @@ def open_movie_detail(movie_id):
     }:
         current_page = st.session_state.get("main_navigation", "Trang chủ")
     st.session_state["return_page"] = current_page
-    st.session_state["selected_movie"] = int(movie_id)
-    st.session_state["page"] = "Chi tiết phim"
+    st.session_state["selected_movie"] = str(int(movie_id))
     st.rerun()
 
 
-def movie_grid(
-    movies_df,
-    key,
-    *,
-    columns_count=5,
-    limit=20,
-    score_column=None,
-    score_label="Điểm dự đoán",
-):
+# =========================================
+# 11. HIỂN THỊ LƯỚI PHIM
+# =========================================
+def movie_grid(movies_df, key, *, columns_count=5, limit=20, score_column=None, score_label="Điểm dự đoán"):
     """Hiển thị poster/phim và nút chi tiết; dùng chung cho tìm kiếm và gợi ý."""
     from pages_ui.movie_display import load_poster_data, show_movie_poster
 
@@ -291,11 +407,7 @@ def movie_grid(
         return
 
     displayed_movies = movies_df.head(limit).copy()
-    poster_data = load_poster_data(
-        displayed_movies,
-        spinner_text="Đang tải poster phim...",
-        warn_if_missing_key=False,
-    )
+    poster_data = load_poster_data(displayed_movies, spinner_text="Đang tải poster phim...", warn_if_missing_key=False)
 
     for start in range(0, len(displayed_movies), columns_count):
         batch = displayed_movies.iloc[start:start + columns_count]
@@ -323,11 +435,7 @@ def movie_grid(
                         else:
                             st.metric(score_label, f"{score:.2f}/5")
 
-                    if st.button(
-                        "Xem chi tiết",
-                        key=f"{key}_detail_{movie_id}",
-                        use_container_width=True,
-                    ):
+                    if st.button("Xem chi tiết", key=f"{key}_detail_{movie_id}", width="stretch"):
                         open_movie_detail(movie_id)
 
 
@@ -337,5 +445,4 @@ def movie_carousel(movies_df, key, limit=20):
     Hiển thị phim theo dạng lưới nhiều cột.
 
     """
-
     movie_grid(movies_df, key, columns_count=5, limit=limit)

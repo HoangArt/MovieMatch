@@ -1,10 +1,8 @@
 import streamlit as st
-
-from pages_ui.common import context, enrich, translate_genres
+from src.common import context, enrich, translate_genres, shorten_text
 from pages_ui.movie_display import load_poster_data, show_movie_poster
 from src.content_recommender import recommend_by_favorite_movies
 from src.database import get_user_favorite_movie_ids
-
 
 def show_recommendations_page(user_id):
     """Hiển thị gợi ý cold-start kèm poster lấy từ TMDB."""
@@ -52,8 +50,12 @@ def show_recommendations_page(user_id):
             with columns[index % 3]:
                 with st.container(border=True):
                     show_movie_poster(movie, poster_data, width=None)
-                    st.write(f"**{movie['title']}**")
-                    st.caption(translate_genres(movie["genres"]))
+                    
+                    st.write(f"**{shorten_text(movie["title"])}**")
+
+                    
+                    st.caption(f"**{shorten_text(translate_genres(movie["genres"]), max_chars=55)}**")
+
                     st.metric(
                         "Độ tương đồng nội dung",
                         f"{float(movie['similarity']) * 100:.1f}%",

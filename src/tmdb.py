@@ -1,51 +1,56 @@
-import os
-
-import requests
 import streamlit as st
+import os
+import pandas as pd
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_URL = "https://image.tmdb.org/t/p"
 
+# ==================================================
+# 1. LẤY TMDB API KEY
+# ==================================================
 
-# 1. LẤY API KEY
-def get_api_key():
+
+def get_tmdb_api_key():
     """
-    Đọc API key từ Streamlit Secrets.
-    Có thể dùng biến môi trường làm phương án dự phòng.
+    Lấy API key từ biến môi trường hoặc secrets.toml
     """
 
+    # Ưu tiên API key trong biến môi trường.
+    api_key = os.getenv("TMDB_API_KEY", "")
+    if api_key:
+        return api_key
+
+    # Nếu không có, đọc từ Streamlit secrets.
     try:
-        api_key = st.secrets.get("TMDB_API_KEY")
+        api_key = st.secrets.get("TMDB_API_KEY", "")
     except Exception:
-        api_key = None
+        api_key = ""
 
-    return api_key or os.getenv("TMDB_API_KEY")
+    return api_key
 
 
-# 2. LẤY THÔNG TIN PHIM TỪ TMDB
-@st.cache_data(
-    ttl=3600,
-    max_entries=500,
-    show_spinner=False,
-)
-def get_movie_info(tmdb_id, language="vi-VN"):
+# ==================================================
+# 2. LẤY THÔNG TIN MỘT PHIM TỪ TMDB
+# ==================================================
+@st.cache_data(ttl=24*60*60, show_spinner=False)
+def fetch_tmdb_movie(tmdb_id, api_key, language="vi-VN"):
     """
-    Lấy thông tin một bộ phim từ TMDB.
-
-    Cache kết quả trong 1 giờ để tránh
-    gọi API lặp lại khi Streamlit chạy lại.
+    Gọi TMDB API để lấy thông tin một bộ phim. 
+    Cache kết quả trong 24 giờ.
     """
-
-    api_key = get_api_key()
-
-    # Nếu chưa cấu hình API key,
-    # trang chủ vẫn có thể hiển thị danh sách phim.
     if not api_key or tmdb_id is None:
         return {}
 
     try:
+        tmdb_id = int(tmdb_id)
+
+        if tmdb_id <= 0:
+            return {}
+
         response = requests.get(
-            f"{TMDB_BASE_URL}/movie/{int(tmdb_id)}",
+            f"{TMDB_BASE_URL}/movie/{tmdb_id}",
             params={
                 "api_key": api_key,
                 "language": language,
@@ -54,44 +59,102 @@ def get_movie_info(tmdb_id, language="vi-VN"):
         )
 
         response.raise_for_status()
-        data = response.json()
+        movie_info = response.json()
 
-        backdrop_path = data.get("backdrop_path")
-        poster_path = data.get("poster_path")
+        poster_path = movie_info.get("poster_path")
+        backdrop_path = movie_info.get("backdrop_path")
 
+        # Lấy đường dẫn poster và ảnh nền
+        poster_url = f"{TMDB_IMAGE_URL}/w342{poster_path}" if poster_path else None
+        poster = f"{TMDB_IMAGE_URL}/w500{poster_path}" if poster_path else None
+        backdrop = f"{TMDB_IMAGE_URL}/w1280{backdrop_path}" if backdrop_path else None
+
+        # Trả về các thông tin cần thiết cho giao diện.
         return {
-            "backdrop": (
-                f"{TMDB_IMAGE_URL}/w1280{backdrop_path}"
-                if backdrop_path
-                else None
+            "poster_url": poster_url,
+            "poster": poster,
+            "backdrop": backdrop,
+            "tmdb_title": movie_info.get("title", ""),
+            "overview": movie_info.get("overview", ""),
+            "release_date": movie_info.get("release_date", ""),
+            "runtime": movie_info.get("runtime"),
+            "tmdb_vote_average": movie_info.get("vote_average"),
+            "original_language": movie_info.get(
+                "original_language", ""
             ),
-            "poster": (
-                f"{TMDB_IMAGE_URL}/w500{poster_path}"
-                if poster_path
-                else None
-            ),
-            "overview": data.get("overview", ""),
+            "tagline": movie_info.get("tagline", ""),
+            "tmdb_genres": [
+                genre["name"]
+                for genre in movie_info.get("genres", [])
+            ],
+            "homepage": movie_info.get("homepage", ""),
         }
 
-    except (requests.RequestException, ValueError, TypeError):
+    except (requests.RequestException, ValueError, TypeError, OverflowError):
         return {}
 
+# ==================================================
+# 3. LẤY THÔNG TIN NHIỀU PHIM
+# ==================================================
 
-# 3. LẤY ẢNH NỀN
-def get_movie_backdrop(tmdb_id):
-    info = get_movie_info(tmdb_id)
 
-    return info.get("backdrop")
+def fetch_all_posters(tmdb_ids, api_key):
+    """
+    Lấy thông tin Poster từ TMDB của nhiều phim.
 
-# 4. LẤY POSTER
-def get_movie_poster(tmdb_id):
-    info = get_movie_info(tmdb_id)
+    Các yêu cầu được thực hiện song song.
+    Kết quả trả về là dictionary có tmdbId làm khóa.
+    """
 
-    return info.get("poster")
+    if not api_key or tmdb_ids is None:
+        return {}
 
-# 5. LẤY MÔ TẢ TIẾNG VIỆT
+    # Lọc ID trống, ID không hợp lệ và ID trùng nhau.
+    valid_ids = set()
+
+    for value in tmdb_ids:
+        try:
+            if pd.isna(value):
+                continue
+
+            numeric_id = float(value)
+
+            if (numeric_id > 0 and numeric_id.is_integer()):
+                valid_ids.add(int(numeric_id))
+
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+    if not valid_ids:
+        return {}
+
+    poster_data = {}
+
+    # Gửi nhiều yêu cầu API đồng thời.
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_id = {
+            executor.submit(
+                fetch_tmdb_movie,
+                tmdb_id,
+                api_key,
+            ): tmdb_id
+            for tmdb_id in valid_ids
+        }
+
+        # Thu thập kết quả khi từng yêu cầu hoàn thành.
+        for future in as_completed(future_to_id):
+            tmdb_id = future_to_id[future]
+
+            try:
+                poster_data[tmdb_id] = future.result()
+            except Exception:
+                poster_data[tmdb_id] = {}
+
+    return poster_data
+
+# LẤY MÔ TẢ TIẾNG VIỆT
 def get_vietnamese_overview(tmdb_id):
-    info = get_movie_info(
+    info = fetch_tmdb_movie(
         tmdb_id,
         language="vi-VN",
     )
@@ -101,7 +164,7 @@ def get_vietnamese_overview(tmdb_id):
     # Nếu TMDB không có mô tả tiếng Việt,
     # thử lấy mô tả tiếng Anh.
     if not overview:
-        english_info = get_movie_info(
+        english_info = fetch_tmdb_movie(
             tmdb_id,
             language="en-US",
         )

@@ -1,7 +1,5 @@
 import streamlit as st
-
-# Import hàm load dữ liệu từ file src/data.py
-from src.data import load_movielens_data
+from src.common import load_movielens_data
 
 # Cache dữ liệu để tránh tải lại nhiều lần
 
@@ -11,8 +9,6 @@ def get_data():
     return load_movielens_data()
 
 # Hàm hiển thị trang
-
-
 def show_data_explorer_page():
     st.header("Khám phá dữ liệu Movielens")
     st.write("Dưới đây là dữ liệu Movielens được tải từ các tệp CSV.")
@@ -97,7 +93,7 @@ def show_data_explorer_page():
 
         st.dataframe(
             filtered_movies.head(100),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -112,7 +108,7 @@ def show_data_explorer_page():
 
         st.dataframe(
             ratings.head(100),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -127,7 +123,7 @@ def show_data_explorer_page():
 
         st.dataframe(
             ratings_with_movies.head(100),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -137,7 +133,7 @@ def show_data_explorer_page():
 
         st.dataframe(
             tags.head(100),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -147,6 +143,6 @@ def show_data_explorer_page():
 
         st.dataframe(
             links.head(100),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
