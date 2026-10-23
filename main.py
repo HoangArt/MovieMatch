@@ -5,6 +5,7 @@ from pages_ui.auth import show_auth_page
 from pages_ui.data_explorer import show_data_explorer_page
 from pages_ui.favorite_movies import show_favorite_movies_page
 from pages_ui.recommendations import show_recommendations_page
+from pages_ui.movie_detail import show_movie_detail_page
 from src.database import init_db, is_onboarding_completed
 
 # Cấu hình trang web
@@ -25,6 +26,23 @@ if "username" not in st.session_state:
 
 if st.session_state.user_id is None:
     show_auth_page()
+
+elif "movie_id" in st.query_params:
+    # Đang mở trang chi tiết phim
+    try:
+        movie_id = int(st.query_params["movie_id"])
+
+        if movie_id <= 0:
+            raise ValueError("movie_id phải là số dương")
+
+        show_movie_detail_page(movie_id)
+
+    except (ValueError, TypeError):
+        st.error("Đường dẫn phim không hợp lệ.")
+
+        if st.button("Quay lại trang chủ"):
+            st.query_params.clear()
+            st.rerun()
 
 else:
     # Tạo thanh bên
@@ -77,5 +95,4 @@ else:
     if st.sidebar.button("Đăng xuất"):
         st.session_state.user_id = None
         st.session_state.username = None
-
         st.rerun()
