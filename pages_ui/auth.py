@@ -3,7 +3,6 @@ from src.database import init_db, register_user, authenticate_user
 
 init_db()   # Tạo cơ sở dữ liệu nếu chưa tồn tại
 
-
 def show_auth_page():
     """
     Hiển thị giao diện đăng nhập/đăng ký
