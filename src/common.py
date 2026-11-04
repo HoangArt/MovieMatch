@@ -424,7 +424,7 @@ def movie_grid(movies_df, key, *, columns_count=5, limit=20, score_column=None, 
                     count_value = movie.get("count", 0)
                     rating_count = int(count_value) if pd.notna(count_value) else 0
                     if pd.notna(mean_rating) and rating_count > 0:
-                        st.caption(f"⭐ {float(mean_rating):.1f}/5 · {rating_count:,} lượt")
+                        st.caption(f":star: {float(mean_rating):.1f}/5 · {rating_count:,} lượt")
                     elif "rating_count" in movie.index:
                         st.caption(f"{int(movie.get('rating_count', 0)):,} lượt đánh giá")
 

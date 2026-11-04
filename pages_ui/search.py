@@ -1,155 +1,73 @@
-import streamlit as st
 import pandas as pd
-from pages_ui.movie_display import (
-    load_poster_data,
-    show_movie_poster,
-)
+import streamlit as st
 
-from src.common import (
-    context,
-    enrich,
-    GENRE_TRANSLATIONS,
-    shorten_text,
-)
+from pages_ui.movie_display import load_poster_data, show_movie_poster
+from src.common import context, enrich, GENRE_TRANSLATIONS, format_movie_title, shorten_text, translate_genres
 
 
-# ==================================================
-# 1. HIỂN THỊ DANH SÁCH PHIM TÌM KIẾM
-# ==================================================
+PAGE_SIZE = 24
 
-def show_search_results(movies, poster_data):
-    """
-    Hiển thị poster, tên phim, điểm đánh giá,
-    số lượt đánh giá và nút xem chi tiết.
-    """
 
-    # Kiểm tra danh sách phim
-    if movies.empty:
+def _open_movie_detail(movie_id):
+    """Chuyển sang trang chi tiết và ghi nhớ trang tìm kiếm."""
+    st.query_params["movie_id"] = str(int(movie_id))
+    st.query_params["return_page"] = "search"
+    st.rerun()
+
+
+def show_search_results(movies, poster_data, *, key_prefix="search"):
+    """Hiển thị kết quả dạng lưới, kèm điểm và nút xem chi tiết."""
+    if movies is None or movies.empty:
         st.info("Không tìm thấy phim phù hợp.")
         return
 
-    # Hiển thị phim theo hàng ngang
-    with st.container(
-        horizontal=True,
-        wrap=True,
-        gap="small",
-    ):
-        for _, movie in movies.iterrows():
+    columns_per_row = 5
+    for start in range(0, len(movies), columns_per_row):
+        row = movies.iloc[start:start + columns_per_row]
+        columns = st.columns(columns_per_row, gap="small")
 
-            # Mỗi phim có một khung riêng
-            with st.container(width=170):
+        for column, (_, movie) in zip(columns, row.iterrows()):
+            movie_id = int(movie["movieId"])
+            with column:
+                with st.container(border=True):
+                    show_movie_poster(movie, poster_data, width=None)
 
-                # 1. Hiển thị poster
-                show_movie_poster(
-                    movie,
-                    poster_data,
-                    width=150,
-                )
+                    st.write(f"**{shorten_text(format_movie_title(movie['title']), max_chars=20)}**")
+                    st.caption(shorten_text(translate_genres(movie.get("genres", "")), max_chars=20))
 
-                # 2. Rút gọn tên phim
-                title = shorten_text(
-                    movie.get("title", ""),
-                    max_chars=23,
-                )
+                    rating = movie.get("mean", movie.get("avg_rating"))
+                    count_value = movie.get("count", movie.get("rating_count", 0))
+                    count = int(count_value) if pd.notna(count_value) else 0
 
-                st.write(f"**{title}**")
+                    if pd.notna(rating) and count:
+                        st.caption(f":star: {float(rating):.1f}/5 · {count:,} lượt")
+                    else:
+                        st.caption("Chưa có đánh giá")
 
-                # 3. Hiển thị điểm đánh giá trung bình
-                avg_rating = movie.get("avg_rating")
-
-                if pd.notna(avg_rating):
-                    st.caption(
-                        f"Đánh giá: {avg_rating:.1f}/5"
-                    )
-                else:
-                    st.caption("Chưa có điểm đánh giá")
-
-                # 4. Hiển thị số lượt đánh giá
-                rating_count = movie.get(
-                    "rating_count",
-                    movie.get("count", 0),
-                )
-
-                if pd.isna(rating_count):
-                    rating_count = 0
-
-                try:
-                    rating_count = int(rating_count)
-                except (TypeError, ValueError, OverflowError):
-                    rating_count = 0
-
-                st.caption(
-                    f"{rating_count:,} lượt đánh giá"
-                )
-
-                # 5. Lấy ID phim
-                movie_id = movie.get("movieId")
-
-                # Hỗ trợ trường hợp cột có tên movie_id
-                if pd.isna(movie_id):
-                    movie_id = movie.get("movie_id")
-
-                # 6. Tạo nút xem chi tiết
-                if pd.notna(movie_id):
-                    try:
-                        movie_id = int(movie_id)
-                    except (TypeError, ValueError, OverflowError):
-                        continue
-
-                    if st.button(
-                        "Xem chi tiết",
-                        key=f"detail_search_{movie_id}",
-                        width="stretch",
-                    ):
-                        # Chuyển đến trang chi tiết phim
+                    if st.button("Xem chi tiết", key=f"{key_prefix}_detail_{movie_id}", width="stretch"):
                         st.query_params["movie_id"] = str(movie_id)
+                        st.query_params["return_page"] = "Tìm kiếm"
+                        _open_movie_detail(movie_id)
 
-                        # Ghi nhớ trang trước đó
-                        st.query_params["return_page"] = "search"
-
-                        # Chạy lại ứng dụng
-                        st.rerun()
-
-
-# ==================================================
-# 2. TRANG TÌM KIẾM PHIM
-# ==================================================
 
 def show_search():
     st.title("Khám phá phim")
-
-    st.caption(
-        "Tìm kiếm những bộ phim yêu thích của bạn."
-    )
-
-    # --------------------------------------------------
-    # Đọc dữ liệu
-    # --------------------------------------------------
+    st.caption("Tìm kiếm, lọc thể loại và sắp xếp phim theo đánh giá cộng đồng.")
 
     try:
         movies, ratings, _ = context()
         df = enrich(movies, ratings)
-
     except Exception as error:
         st.error("Không thể tải dữ liệu phim.")
         with st.expander("Chi tiết lỗi"):
             st.exception(error)
         return
 
-    # --------------------------------------------------
-    # Thanh tìm kiếm
-    # --------------------------------------------------
-
-    q = st.text_input(
+    query = st.text_input(
         "Tìm kiếm phim",
         placeholder="Nhập tên phim bạn muốn tìm...",
         key="search",
-        label_visibility="collapsed",
     )
-
-    # --------------------------------------------------
-    # Danh sách thể loại
-    # --------------------------------------------------
 
     genres = sorted({
         genre
@@ -158,20 +76,13 @@ def show_search():
         if genre and genre != "(no genres listed)"
     })
 
-    genre_options = ["Tất cả"] + genres
+    with st.expander("Bộ lọc và sắp xếp", expanded=True):
+        col_genre, col_sort = st.columns(2)
 
-    # --------------------------------------------------
-    # Bộ lọc và sắp xếp
-    # --------------------------------------------------
-
-    with st.expander("Bộ lọc và sắp xếp"):
-
-        col1, col2 = st.columns(2)
-
-        with col1:
+        with col_genre:
             genre = st.selectbox(
                 "Thể loại",
-                genre_options,
+                ["Tất cả"] + genres,
                 format_func=lambda value: (
                     "Tất cả thể loại"
                     if value == "Tất cả"
@@ -180,7 +91,7 @@ def show_search():
                 key="search_genre",
             )
 
-        with col2:
+        with col_sort:
             sort = st.selectbox(
                 "Sắp xếp",
                 [
@@ -193,23 +104,15 @@ def show_search():
                 key="search_sort",
             )
 
-    # --------------------------------------------------
-    # Lọc theo tên phim
-    # --------------------------------------------------
-
-    if q.strip():
+    if query.strip():
         df = df[
             df["title"].str.contains(
-                q.strip(),
+                query.strip(),
                 case=False,
                 regex=False,
                 na=False,
             )
         ]
-
-    # --------------------------------------------------
-    # Lọc theo thể loại
-    # --------------------------------------------------
 
     if genre != "Tất cả":
         df = df[
@@ -219,76 +122,45 @@ def show_search():
             .apply(lambda values: genre in values)
         ]
 
-    # --------------------------------------------------
-    # Sắp xếp kết quả
-    # --------------------------------------------------
+    sort_options = {
+        "Phổ biến nhất": ("count", False),
+        "Ít phổ biến nhất": ("count", True),
+        "Điểm cao nhất": ("score", False),
+        "Điểm thấp nhất": ("score", True),
+        "Tên A–Z": ("title", True),
+    }
+    sort_column, ascending = sort_options[sort]
+    df = df.sort_values(sort_column, ascending=ascending, kind="stable")
 
-    if sort == "Phổ biến nhất":
-        df = df.sort_values(
-            "count",
-            ascending=False,
-        )
+    # Khi bộ lọc thay đổi, quay số lượng hiển thị về trang đầu tiên.
+    filter_key = (query.strip(), genre, sort)
+    if st.session_state.get("search_filter_key") != filter_key:
+        st.session_state["search_filter_key"] = filter_key
+        st.session_state["search_visible_movies"] = PAGE_SIZE
 
-    elif sort == "Ít phổ biến nhất":
-        df = df.sort_values(
-            "count",
-            ascending=True,
-        )
-
-    elif sort == "Điểm cao nhất":
-        df = df.sort_values(
-            "score",
-            ascending=False,
-        )
-
-    elif sort == "Điểm thấp nhất":
-        df = df.sort_values(
-            "score",
-            ascending=True,
-        )
-
-    else:
-        df = df.sort_values(
-            "title",
-            ascending=True,
-        )
-
-    # --------------------------------------------------
-    # Thông tin kết quả tìm kiếm
-    # --------------------------------------------------
+    visible_count = st.session_state.get("search_visible_movies", PAGE_SIZE)
+    displayed = df.head(visible_count).copy()
 
     st.subheader("Kết quả tìm kiếm")
-
     st.caption(
-        f"Tìm thấy {len(df):,} phim · "
-        "Hiển thị tối đa 24 phim"
+        f"Tìm thấy {len(df):,} phim · Đang hiển thị {len(displayed):,} phim"
     )
 
-    if df.empty:
-        st.info(
-            "Không tìm thấy phim phù hợp. "
-            "Hãy thử tên phim hoặc thể loại khác."
-        )
+    if displayed.empty:
+        st.info("Không tìm thấy phim phù hợp. Hãy thử từ khóa hoặc thể loại khác.")
         return
 
-    # Chỉ hiển thị tối đa 24 phim
-    display_df = df.head(24).copy()
-
-    # --------------------------------------------------
-    # Tải poster cho các phim sẽ hiển thị
-    # --------------------------------------------------
-
     poster_data = load_poster_data(
-        display_df,
+        displayed,
         spinner_text="Đang tải poster phim...",
         warn_if_missing_key=True,
     )
+    show_search_results(displayed, poster_data)
 
-    # --------------------------------------------------
-    # Hiển thị kết quả và nút chi tiết
-    # --------------------------------------------------
-
-    show_search_results(
-        display_df,
-        poster_data,
-    )
+    if visible_count < len(df):
+        if st.button("⬇ Tải thêm 24 phim", width="stretch"):
+            st.session_state["search_visible_movies"] = min(
+                visible_count + PAGE_SIZE,
+                len(df),
+            )
+            st.rerun()

@@ -62,16 +62,16 @@ MovieMatch/
 │   ├── home.py                     # Trang chủ
 │   ├── movie_detail.py             # Chi tiết phim và đánh giá phim
 │   ├── movie_display.py            # Tải/hiển thị poster dùng chung
-│   ├── page_transition.py          # Overlay khi chuyển trang
+│   ├── rating_widget.py            # Widget đánh giá phim
 │   ├── recommendations.py          # Giao diện gợi ý phim
 │   └── search.py                   # Tìm kiếm phim
 └── src/
     ├── common.py                  # Thành phần hiển thị và hàm dùng chung
     ├── content_recommender.py     # TF-IDF và cosine similarity
-    ├── data.py                    # Đọc/tải bộ dữ liệu MovieLens
     ├── database.py                # SQLite và thao tác dữ liệu tài khoản
     ├── recommender_models.py      # User/Item KNN, SVD và Keras Embedding
-    └── tmdb.py                    # Thông tin chi tiết phim từ TMDB và tải poster theo lô
+    ├── tmdb.py                    # Thông tin chi tiết phim từ TMDB và tải poster theo lô
+    └── user_ratings.py            # Lưu và truy xuất điểm đánh giá của người dùng website
 ```
 
 ## Cài đặt và chạy
@@ -112,7 +112,7 @@ Streamlit sẽ hiển thị địa chỉ chạy local trong terminal (thường 
 
 ### 6. Dữ liệu MovieLens
 
-Bốn tệp CSV của `ml-latest-small` được đặt tại `data/ml-latest-small/`. Nếu thiếu các tệp cần thiết, `src/data.py` có thể tải bộ dữ liệu từ GroupLens; thao tác này cần kết nối Internet.
+Bốn tệp CSV của `ml-latest-small` được đặt tại `data/ml-latest-small/`. Nếu thiếu các tệp cần thiết, `src/common.py` có thể tải bộ dữ liệu từ GroupLens; thao tác này cần kết nối Internet.
 
 ## Cấu hình TMDB
 
@@ -136,6 +136,8 @@ TMDB_API_KEY = "YOUR_TMDB_API_KEY"
 Có thể dùng biến môi trường `TMDB_API_KEY` thay cho Streamlit Secrets.
 
 ## Các mô hình gợi ý
+
+Notebook huấn luyện/đánh giá đầy đủ các mô hình cần `tensorflow`; cài trong môi trường notebook bằng `%pip install tensorflow` nếu chưa có. Trong ứng dụng Streamlit, TensorFlow là tùy chọn và chỉ cần cho Keras Embedding.
 
 Trên trang **Gợi ý phim**, người dùng có thể chọn một trong các phương pháp sau:
 
@@ -165,7 +167,7 @@ Trên trang **Gợi ý phim**, người dùng có thể chọn một trong các 
 
 - Mã nguồn: `src/recommender_models.py`.
 - Huấn luyện lớp embedding cho người dùng và phim cùng các bias để dự đoán điểm đánh giá từ dữ liệu MovieLens.
-- Mô hình này cần TensorFlow và có thể mất thêm thời gian ở lần sử dụng đầu tiên.
+- Mô hình này cần TensorFlow và chỉ huấn luyện khi người dùng chọn; có thể mất thêm thời gian ở lần sử dụng đầu tiên. Cài phần phụ thuộc tùy chọn bằng `pip install -r requirements-optional-keras.txt`.
 
 **Cách kết hợp dữ liệu:** các mô hình cộng tác được xây dựng từ lịch sử đánh giá MovieLens. Điểm đánh giá do tài khoản CinaMatch tạo ra được lưu riêng theo tài khoản, sau đó dùng làm hồ sơ để xếp hạng phim. `user_id` của website không được xem là `userId` trong MovieLens.
 
@@ -175,7 +177,7 @@ Trên trang **Gợi ý phim**, người dùng có thể chọn một trong các 
 2. Chọn các phim yêu thích theo hướng dẫn onboarding rồi lưu lựa chọn.
 3. Vào **Gợi ý phim** và chọn mô hình muốn thử.
 4. Mở trang chi tiết từ các thẻ phim, xem thông tin và chấm điểm phim.
-5. Quay lại **Gợi ý phim** để tạo lại danh sách dựa trên hồ sơ đã cập nhật.
+5. Quay lại **Gợi ý phim**, chọn Content-based, User-based KNN, Item-based KNN, Truncated SVD hoặc Keras Embedding để tạo danh sách dựa trên hồ sơ đã cập nhật. Các mô hình cộng tác cần ít nhất 3 rating đã lưu; nếu chưa đủ, hệ thống dùng TF-IDF cho cold-start.
 6. Vào **Phim yêu thích** để quản lý danh sách yêu thích; mở **Thống kê** để xem dữ liệu MovieLens.
 
 ## Lưu trữ dữ liệu và mô hình
@@ -183,7 +185,7 @@ Trên trang **Gợi ý phim**, người dùng có thể chọn một trong các 
 - **SQLite:** `src/database.py` tạo `users.db` tại thư mục gốc của project khi ứng dụng chạy lần đầu. Database lưu tài khoản, danh sách yêu thích, trạng thái onboarding và điểm đánh giá của người dùng website.
 - **Bảo vệ mật khẩu:** ứng dụng lưu salt và giá trị băm PBKDF2-HMAC-SHA256, không lưu mật khẩu thuần văn bản.
 - **Dữ liệu MovieLens:** nằm trong `data/ml-latest-small/`.
-- **Cache mô hình:** các bảng dữ liệu, ma trận TF-IDF và một số mô hình được cache trong bộ nhớ tiến trình Streamlit bằng `st.cache_data`/`st.cache_resource`. **Hiện tại các mô hình không tự được lưu thành file `.joblib`, `.pkl` hoặc `.keras`**; sau khi cache bị xóa hoặc ứng dụng khởi động lại, những thành phần cần thiết có thể được xây dựng/huấn luyện lại.
+- **Cache mô hình:** ma trận TF-IDF và các mô hình cộng tác MovieLens (User/Item KNN, Truncated SVD) được cache trong bộ nhớ tiến trình Streamlit bằng `st.cache_resource`; Keras Embedding chỉ được huấn luyện khi chọn mô hình và TensorFlow đã cài. Ứng dụng không tự ghi các mô hình này thành file `.joblib`, `.pkl` hoặc `.keras`; sau khi cache bị xóa hoặc ứng dụng khởi động lại, chúng có thể được xây dựng/huấn luyện lại.
 - **TMDB:** dữ liệu trả về được cache để giảm các yêu cầu lặp lại.
 
 Không xóa `users.db` nếu cần giữ tài khoản và đánh giá đã lưu. Khi sao lưu hoặc triển khai, bảo vệ database và secrets như dữ liệu riêng tư.
