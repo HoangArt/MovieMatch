@@ -62,6 +62,7 @@ MovieMatch/
 │   ├── home.py                     # Trang chủ
 │   ├── movie_detail.py             # Chi tiết phim và đánh giá phim
 │   ├── movie_display.py            # Tải/hiển thị poster dùng chung
+│   ├── rated_movies.py             # Danh sách phim người dùng đã đánh giá
 │   ├── rating_widget.py            # Widget đánh giá phim
 │   ├── recommendations.py          # Giao diện gợi ý phim
 │   └── search.py                   # Tìm kiếm phim
@@ -151,12 +152,16 @@ Trên trang **Gợi ý phim**, người dùng có thể chọn một trong các 
 ### 2. User-based KNN
 
 - Mã nguồn: `src/recommender_models.py`.
-- Tìm những người dùng MovieLens có mẫu đánh giá gần với hồ sơ điểm của tài khoản hiện tại, sau đó tổng hợp tín hiệu từ các láng giềng.
+- Tìm những người dùng MovieLens có mẫu đánh giá gần với hồ sơ điểm của tài khoản hiện tại.
+- Đề xuất các phim được những láng giềng này đánh giá tích cực (mặc định từ 4/5), xếp hạng theo tỷ lệ phiếu tích cực có trọng số cosine similarity.
+- `recommendation_score` là điểm xếp hạng từ 0 đến 1, **không phải rating dự đoán**; KNN được đánh giá bằng Precision@K/Recall@K, không đưa vào RMSE.
 
 ### 3. Item-based KNN
 
 - Mã nguồn: `src/recommender_models.py`.
-- Tìm các phim có mẫu đánh giá tương tự những phim người dùng đã chấm điểm; dùng độ tương đồng giữa phim để ước lượng điểm các phim chưa đánh giá.
+- Tìm các phim có mẫu đánh giá tương tự những phim người dùng đã thích (rating từ 4/5 trở lên).
+- Xếp hạng phim chưa xem theo cosine similarity có trọng số với các phim yêu thích; không ước lượng rating cho phim ứng viên.
+- `recommendation_score` là điểm tương đồng dùng để sắp xếp danh sách, không phải rating dự đoán; KNN được đánh giá bằng Precision@K/Recall@K, không đưa vào RMSE.
 
 ### 4. Truncated SVD
 
@@ -177,23 +182,23 @@ Trên trang **Gợi ý phim**, người dùng có thể chọn một trong các 
 2. Chọn các phim yêu thích theo hướng dẫn onboarding rồi lưu lựa chọn.
 3. Vào **Gợi ý phim** và chọn mô hình muốn thử.
 4. Mở trang chi tiết từ các thẻ phim, xem thông tin và chấm điểm phim.
-5. Quay lại **Gợi ý phim**, chọn Content-based, User-based KNN, Item-based KNN, Truncated SVD hoặc Keras Embedding để tạo danh sách dựa trên hồ sơ đã cập nhật. Các mô hình cộng tác cần ít nhất 3 rating đã lưu; nếu chưa đủ, hệ thống dùng TF-IDF cho cold-start.
-6. Vào **Phim yêu thích** để quản lý danh sách yêu thích; mở **Thống kê** để xem dữ liệu MovieLens.
+5. Quay lại **Gợi ý phim**, chọn Content-based, User-based KNN, Item-based KNN, Truncated SVD hoặc Keras Embedding để tạo danh sách dựa trên hồ sơ đã cập nhật. Các mô hình cộng tác cần ít nhất 3 rating đã lưu; nếu chưa đủ, hệ thống dùng TF-IDF cho cold-start. Với KNN, giao diện hiển thị điểm ủng hộ/độ tương đồng để xếp hạng phim; chỉ SVD và Keras Embedding hiển thị rating dự đoán.
+6. Vào **Phim yêu thích** để quản lý danh sách yêu thích, **Phim đã đánh giá** để xem các phim và điểm bạn đã chấm (tải poster theo từng lô), hoặc mở **Thống kê** để xem dữ liệu MovieLens.
 
 ## Lưu trữ dữ liệu và mô hình
 
-- **SQLite:** `src/database.py` tạo `users.db` tại thư mục gốc của project khi ứng dụng chạy lần đầu. Database lưu tài khoản, danh sách yêu thích, trạng thái onboarding và điểm đánh giá của người dùng website.
+- **SQLite:** `src/database.py` tạo `movie_recommendations.db` tại thư mục gốc của project khi ứng dụng chạy lần đầu. Database lưu tài khoản, danh sách yêu thích, trạng thái onboarding và điểm đánh giá của người dùng website.
 - **Bảo vệ mật khẩu:** ứng dụng lưu salt và giá trị băm PBKDF2-HMAC-SHA256, không lưu mật khẩu thuần văn bản.
 - **Dữ liệu MovieLens:** nằm trong `data/ml-latest-small/`.
 - **Cache mô hình:** ma trận TF-IDF và các mô hình cộng tác MovieLens (User/Item KNN, Truncated SVD) được cache trong bộ nhớ tiến trình Streamlit bằng `st.cache_resource`; Keras Embedding chỉ được huấn luyện khi chọn mô hình và TensorFlow đã cài. Ứng dụng không tự ghi các mô hình này thành file `.joblib`, `.pkl` hoặc `.keras`; sau khi cache bị xóa hoặc ứng dụng khởi động lại, chúng có thể được xây dựng/huấn luyện lại.
 - **TMDB:** dữ liệu trả về được cache để giảm các yêu cầu lặp lại.
 
-Không xóa `users.db` nếu cần giữ tài khoản và đánh giá đã lưu. Khi sao lưu hoặc triển khai, bảo vệ database và secrets như dữ liệu riêng tư.
+Không xóa `movie_recommendations.db` nếu cần giữ tài khoản và đánh giá đã lưu. Khi sao lưu hoặc triển khai, bảo vệ database và secrets như dữ liệu riêng tư.
 
 ## Giới hạn hiện tại và hướng phát triển
 
 - Ứng dụng hiện dùng SQLite để làm demo cục bộ. Muốn triển khai cloud phục vụ nhiều người dùng ổn định, nên chuyển dữ liệu tài khoản và tương tác sang một database được quản lý, có lưu trữ bền vững (ví dụ PostgreSQL/Supabase), đồng thời cấu hình quyền truy cập và backup.
-- Các mô hình đang được dùng để tạo gợi ý trong giao diện. Quy trình đánh giá offline có báo cáo **RMSE, Precision@K và Recall@K** chưa được tích hợp thành trang đánh giá hoàn chỉnh trong phiên bản này.
+- Notebook đánh giá offline bằng **Precision@K và Recall@K** cho TF-IDF, User-based KNN, Item-based KNN, SVD và Keras Embedding. **RMSE chỉ dùng cho Surprise SVD, Truncated SVD và Keras Embedding**, là các mô hình dự đoán rating. Báo cáo hiện được lưu ở các tệp CSV trong thư mục `results/` khi chạy notebook; chưa tích hợp thành trang đánh giá hoàn chỉnh trong ứng dụng.
 - Nên lưu các mô hình đã huấn luyện thành artifact có phiên bản nếu muốn giảm thời gian khởi động lại và triển khai production.
 - Keras Embedding cần được chạy kiểm thử trên môi trường có TensorFlow; lần chạy đầu tiên sẽ huấn luyện mô hình và có thể chậm hơn các mô hình khác.
 

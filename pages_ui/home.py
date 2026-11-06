@@ -1,22 +1,10 @@
 import hashlib
-
 import pandas as pd
 import streamlit as st
 
-from src.common import (
-    load_movie_data,
-    GENRE_TRANSLATIONS,
-    shorten_text,
-    format_movie_title,
-)
-
+from src.common import load_movie_data, GENRE_TRANSLATIONS, shorten_text, format_movie_title
 from src.tmdb import get_tmdb_api_key
-
-from pages_ui.movie_display import (
-    load_poster_data,
-    show_clickable_poster,
-)
-
+from pages_ui.movie_display import load_poster_data, show_movie_poster, navigate_to_movie_detail
 from assets.style import HOME_CSS
 
 
@@ -195,15 +183,19 @@ def show_movie_section(section_title, movies, poster_data):
 
             with st.container(width=170):
 
-                # 1. Hiển thị poster từ cache
-                show_clickable_poster(movie, poster_data)
+                # ID phim
+                movie_id = movie.get("movieId")
+                
+                if pd.isna(movie_id):
+                    movie_id = movie.get("movie_id")
 
-                # 2. Tên phim
-                st.write(
-                    f"**{shorten_text(format_movie_title(movie['title']), max_chars=20)}**"
-                )
+                # Hiển thị poster từ cache
+                show_movie_poster(movie, poster_data, width=150)
 
-                # 3. Điểm đánh giá
+                # Tên phim
+                st.write(f"**{shorten_text(format_movie_title(movie['title']), max_chars=20)}**")
+
+                # Điểm đánh giá
                 avg_rating = movie["avg_rating"]
 
                 if pd.notna(avg_rating):
@@ -211,26 +203,16 @@ def show_movie_section(section_title, movies, poster_data):
                 else:
                     st.caption("Chưa có điểm đánh giá")
 
-                # 4. Số lượt đánh giá
+                # Số lượt đánh giá
                 rating_count = movie["rating_count"]
 
                 st.caption(f"{rating_count:,} lượt đánh giá")
 
-                # 5. ID phim
-                movie_id = movie.get("movieId")
-
-                if pd.isna(movie_id):
-                    movie_id = movie.get("movie_id")
-
-                # 6. Nút xem chi tiết
+                # Nút xem chi tiết
                 if pd.notna(movie_id):
-
                     movie_id = int(movie_id)
-
                     if st.button("Xem chi tiết", key=f"detail_{section_title}_{movie_id}", width="stretch"):
-                        st.query_params["movie_id"] = str(movie_id)
-                        st.query_params["return_page"] = "Trang chủ"
-                        st.rerun()
+                        navigate_to_movie_detail(movie_id, return_page="home")
 
 
 # ==================================================

@@ -1,22 +1,13 @@
 import logging
-import base64
-import html
-
-from urllib.parse import urlencode
-from io import BytesIO
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
+import math
 import pandas as pd
 import requests
 import streamlit as st
 
-from PIL import Image, ImageDraw, ImageFont
-
-from src.tmdb import (
-    fetch_tmdb_poster,
-    fetch_tmdb_movie,
-    get_tmdb_api_key,
-)
+from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+from src.tmdb import fetch_tmdb_poster, fetch_tmdb_movie, get_tmdb_api_key
 
 
 # ==================================================
@@ -25,65 +16,142 @@ from src.tmdb import (
 
 logger = logging.getLogger(__name__)
 
-# Cache ảnh poster trong 24 giờ
-POSTER_CACHE_TTL = 86400
+# Cache
+POSTER_CACHE_TTL = 24 * 60 * 60
 
-# Số yêu cầu TMDb chạy đồng thời
+# Số luồng tải TMDb đồng thời
 MAX_WORKERS = 5
 
-# Kích thước ảnh poster
+# Kích thước poster
 POSTER_MAX_SIZE = (342, 513)
 
+# Giới hạn tải ảnh
+MAX_POSTER_BYTES = 8 * 1024 * 1024
+MAX_POSTER_PIXELS = 40_000_000
+
 
 # ==================================================
-# 2. KIỂM TRA TMDB ID
+# 2. ĐIỀU HƯỚNG CHI TIẾT PHIM
 # ==================================================
 
-def normalize_tmdb_id(value):
+RETURN_PAGE_ALIASES = {
+    "home": "home",
+    "trang chủ": "home",
+
+    "search": "search",
+    "tìm kiếm": "search",
+
+    "recommendations": "recommendations",
+    "gợi ý phim": "recommendations",
+
+    "favorite_movies": "favorite_movies",
+    "favorites": "favorite_movies",
+    "phim yêu thích": "favorite_movies",
+
+    "rated_movies": "rated_movies",
+    "phim đã đánh giá": "rated_movies",
+
+    "stats": "stats",
+    "thống kê": "stats",
+}
+
+
+def normalize_return_page(return_page="home"):
+    """Chuẩn hóa trang quay lại."""
+
+    value = str(return_page or "home").strip().casefold()
+
+    return RETURN_PAGE_ALIASES.get(value, "home")
+
+
+def normalize_movie_id(movie_id):
+    """Chuyển MovieLens ID thành số nguyên dương."""
+
+    if movie_id is None or isinstance(movie_id, bool):
+        raise ValueError("Movie ID không hợp lệ.")
+
+    try:
+        numeric_id = float(movie_id)
+
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("Movie ID không hợp lệ.") from error
+
+    if (
+        not math.isfinite(numeric_id)
+        or numeric_id <= 0
+        or not numeric_id.is_integer()
+    ):
+        raise ValueError("Movie ID không hợp lệ.")
+
+    return int(numeric_id)
+
+
+def navigate_to_movie_detail(movie_id, return_page="home"):
     """
-    Chuyển TMDb ID về số nguyên hợp lệ.
+    Mở trang chi tiết phim.
 
-    Trả về None nếu ID không hợp lệ.
+    Giữ nguyên các query parameters khác
+    và không sử dụng HTML anchor.
     """
 
     try:
-        if pd.isna(value):
-            return None
+        movie_id = normalize_movie_id(movie_id)
 
-        numeric_id = float(value)
+    except ValueError:
+        logger.warning(
+            "Movie ID không hợp lệ: %r",
+            movie_id,
+        )
 
-        if (
-            numeric_id <= 0
-            or not numeric_id.is_integer()
-        ):
-            return None
+        st.error("Movie ID không hợp lệ.")
+        return
 
-        return int(numeric_id)
+    return_page = normalize_return_page(return_page)
 
-    except (
-        ValueError,
-        TypeError,
-        OverflowError,
-    ):
+    st.query_params["movie_id"] = str(movie_id)
+    st.query_params["return_page"] = return_page
+
+    st.rerun()
+
+
+
+# ==================================================
+# 4. KIỂM TRA TMDB ID
+# ==================================================
+
+def normalize_tmdb_id(value):
+    """Chuẩn hóa TMDb ID; trả None nếu không hợp lệ."""
+
+    try:
+        return normalize_movie_id(value)
+
+    except ValueError:
         return None
 
 
 # ==================================================
-# 3. LẤY POSTER CỦA MỘT PHIM
+# 5. LẤY POSTER TỪ TMDB
 # ==================================================
+
+def _get_poster_url_from_info(info):
+
+    if not isinstance(info, dict):
+        return None
+
+    url = info.get("poster_url") or info.get("poster")
+
+    if isinstance(url, str) and url.strip():
+        return url.strip()
+
+    return None
+
 
 def _fetch_one_poster(tmdb_id, api_key):
     """
-    Lấy thông tin poster từ TMDb.
+    Lấy poster theo hai bước:
 
-    Cách 1:
-        Sử dụng API tải poster nhanh.
-
-    Cách 2:
-        Nếu không có poster, thử API chi tiết phim.
-
-    Không tạo thêm cache tại đây vì các hàm
-    trong src/tmdb.py đã có cache riêng.
+    1. API poster nhanh.
+    2. API chi tiết phim nếu cần.
     """
 
     tmdb_id = normalize_tmdb_id(tmdb_id)
@@ -91,47 +159,39 @@ def _fetch_one_poster(tmdb_id, api_key):
     if tmdb_id is None or not api_key:
         return {}
 
-    # ------------------------------------------
-    # CÁCH 1: LẤY POSTER NHANH
-    # ------------------------------------------
-
+    # Bước 1: API poster nhanh
     try:
+
         info = fetch_tmdb_poster(
             tmdb_id,
             api_key,
         ) or {}
 
-        if (
-            info.get("poster_url")
-            or info.get("poster")
-        ):
+        if _get_poster_url_from_info(info):
             return info
 
     except Exception as error:
+
         logger.warning(
             "Lỗi tải poster nhanh phim %s: %s",
             tmdb_id,
             error,
         )
 
-    # ------------------------------------------
-    # CÁCH 2: LẤY TỪ THÔNG TIN CHI TIẾT
-    # ------------------------------------------
-
+    # Bước 2: API chi tiết phim
     try:
+
         info = fetch_tmdb_movie(
             tmdb_id,
             api_key,
             language="en-US",
         ) or {}
 
-        if (
-            info.get("poster_url")
-            or info.get("poster")
-        ):
+        if _get_poster_url_from_info(info):
             return info
 
     except Exception as error:
+
         logger.warning(
             "Lỗi tải poster dự phòng phim %s: %s",
             tmdb_id,
@@ -142,7 +202,7 @@ def _fetch_one_poster(tmdb_id, api_key):
 
 
 # ==================================================
-# 4. TẢI POSTER CHO DANH SÁCH PHIM
+# 6. TẢI POSTER CHO DANH SÁCH PHIM
 # ==================================================
 
 def load_poster_data(
@@ -152,38 +212,27 @@ def load_poster_data(
     warn_if_missing_key=False,
 ):
     """
-    Lấy thông tin poster của nhiều phim.
+    Tải thông tin poster cho danh sách phim.
 
-    Tham số:
-        movies:
-            DataFrame chứa cột tmdbId.
-
-        spinner_text:
-            Nội dung thông báo khi đang tải.
-
-        warn_if_missing_key:
-            Hiển thị cảnh báo nếu thiếu API key.
+    - Loại bỏ TMDb ID không hợp lệ.
+    - Loại bỏ ID trùng lặp.
+    - Tải song song.
+    - Giới hạn số luồng.
     """
 
-    # ------------------------------------------
-    # KIỂM TRA DỮ LIỆU
-    # ------------------------------------------
-
-    if movies is None:
+    if not isinstance(movies, pd.DataFrame):
         return {}
 
     if movies.empty:
         return {}
 
     if "tmdbId" not in movies.columns:
+
         logger.warning(
             "Dữ liệu phim không có cột tmdbId."
         )
-        return {}
 
-    # ------------------------------------------
-    # LẤY API KEY
-    # ------------------------------------------
+        return {}
 
     api_key = get_tmdb_api_key()
 
@@ -197,32 +246,29 @@ def load_poster_data(
 
         return {}
 
-    # ------------------------------------------
-    # LẤY DANH SÁCH TMDB ID
-    # ------------------------------------------
+    # Lọc và sắp xếp ID duy nhất
+    tmdb_ids = sorted({
+        tmdb_id
+        for value in movies["tmdbId"]
+        if (
+            tmdb_id := normalize_tmdb_id(value)
+        ) is not None
+    })
 
-    valid_ids = set()
-
-    for value in movies["tmdbId"]:
-
-        tmdb_id = normalize_tmdb_id(value)
-
-        if tmdb_id is not None:
-            valid_ids.add(tmdb_id)
-
-    if not valid_ids:
+    if not tmdb_ids:
         return {}
 
-    # ------------------------------------------
-    # TẢI POSTER SONG SONG
-    # ------------------------------------------
+    def _load():
 
-    poster_data = {}
+        poster_data = {}
 
-    def fetch_posters():
+        worker_count = min(
+            MAX_WORKERS,
+            len(tmdb_ids),
+        )
 
         with ThreadPoolExecutor(
-            max_workers=MAX_WORKERS
+            max_workers=worker_count
         ) as executor:
 
             futures = {
@@ -231,7 +277,7 @@ def load_poster_data(
                     tmdb_id,
                     api_key,
                 ): tmdb_id
-                for tmdb_id in valid_ids
+                for tmdb_id in tmdb_ids
             }
 
             for future in as_completed(futures):
@@ -241,60 +287,36 @@ def load_poster_data(
                 try:
                     info = future.result()
 
-                    if not isinstance(info, dict):
-                        continue
+                except Exception:
 
-                    poster_url = (
-                        info.get("poster_url")
-                        or info.get("poster")
-                    )
-
-                    # Chỉ lưu phim có URL poster
-                    if poster_url:
-                        poster_data[tmdb_id] = info
-
-                except Exception as error:
-
-                    logger.warning(
-                        "Không thể tải poster phim %s: %s",
+                    logger.exception(
+                        "Không thể tải poster phim %s",
                         tmdb_id,
-                        error,
                     )
 
-    # ------------------------------------------
-    # HIỂN THỊ SPINNER NẾU CẦN
-    # ------------------------------------------
+                    continue
+
+                if _get_poster_url_from_info(info):
+                    poster_data[tmdb_id] = info
+
+        return poster_data
 
     if spinner_text:
 
         with st.spinner(spinner_text):
-            fetch_posters()
+            return _load()
 
-    else:
-        fetch_posters()
-
-    return poster_data
+    return _load()
 
 
 # ==================================================
-# 5. LẤY URL POSTER TỪ DỮ LIỆU
+# 7. LẤY URL POSTER TỪ DỮ LIỆU
 # ==================================================
 
 def get_movie_poster_url(movie, poster_data):
-    """
-    Lấy URL poster của một phim.
+    """Lấy URL poster từ TMDb ID."""
 
-    Dùng chung cho:
-        - Trang chủ
-        - Trang tìm kiếm
-        - Trang gợi ý phim
-        - Trang phim yêu thích
-    """
-
-    if movie is None:
-        return None
-
-    if not isinstance(poster_data, dict):
+    if movie is None or not isinstance(poster_data, dict):
         return None
 
     tmdb_id = normalize_tmdb_id(
@@ -304,22 +326,13 @@ def get_movie_poster_url(movie, poster_data):
     if tmdb_id is None:
         return None
 
-    info = poster_data.get(
-        tmdb_id,
-        {},
-    ) or {}
-
-    if not isinstance(info, dict):
-        return None
-
-    return (
-        info.get("poster_url")
-        or info.get("poster")
+    return _get_poster_url_from_info(
+        poster_data.get(tmdb_id)
     )
 
 
 # ==================================================
-# 6. TẢI ẢNH POSTER VÀ LƯU CACHE
+# 8. TẢI ẢNH POSTER VÀ LƯU CACHE
 # ==================================================
 
 @st.cache_data(
@@ -329,36 +342,77 @@ def get_movie_poster_url(movie, poster_data):
 )
 def download_poster(url):
     """
-    Tải ảnh poster từ URL.
-
-    Ảnh tải thành công được lưu cache 24 giờ.
-
-    Nếu tải thất bại, hàm phát sinh lỗi để
-    bên ngoài xử lý và hiển thị ảnh mặc định.
+    Tải poster, kiểm tra dung lượng và thu nhỏ ảnh.
     """
 
-    if not url:
-        raise ValueError(
-            "URL poster không hợp lệ."
-        )
+    if (
+        not isinstance(url, str)
+        or not url.startswith(("https://", "http://"))
+    ):
+        raise ValueError("URL poster không hợp lệ.")
 
-    response = requests.get(
+    chunks = []
+    total_bytes = 0
+
+    with requests.get(
         url,
         timeout=(4, 10),
         headers={
             "User-Agent": "MovieMatch/1.0",
         },
-    )
+        stream=True,
+    ) as response:
 
-    response.raise_for_status()
+        response.raise_for_status()
 
-    image = Image.open(
-        BytesIO(response.content)
-    )
+        content_length = response.headers.get("Content-Length")
 
-    image = image.convert("RGB")
+        try:
+            declared_size = (
+                int(content_length)
+                if content_length
+                else None
+            )
+        except (TypeError, ValueError):
+            declared_size = None
 
-    # Giảm kích thước để tiết kiệm RAM
+        if (
+            declared_size is not None
+            and declared_size > MAX_POSTER_BYTES
+        ):
+            raise ValueError(
+                "Ảnh poster vượt quá giới hạn dung lượng."
+            )
+
+        for chunk in response.iter_content(
+            chunk_size=64 * 1024
+        ):
+
+            if not chunk:
+                continue
+
+            total_bytes += len(chunk)
+
+            if total_bytes > MAX_POSTER_BYTES:
+                raise ValueError(
+                    "Ảnh poster vượt quá giới hạn dung lượng."
+                )
+
+            chunks.append(chunk)
+
+    image_bytes = b"".join(chunks)
+
+    with Image.open(BytesIO(image_bytes)) as source:
+
+        if source.width * source.height > MAX_POSTER_PIXELS:
+            raise ValueError(
+                "Kích thước ảnh poster vượt quá giới hạn."
+            )
+
+        image = ImageOps.exif_transpose(
+            source
+        ).convert("RGB")
+
     image.thumbnail(
         POSTER_MAX_SIZE,
         Image.Resampling.LANCZOS,
@@ -368,7 +422,7 @@ def download_poster(url):
 
 
 # ==================================================
-# 7. TẠO POSTER MẶC ĐỊNH
+# 9. CHUYỂN ẢNH SANG DATA URI
 # ==================================================
 
 @st.cache_resource
@@ -408,22 +462,14 @@ def create_placeholder():
 
     return image
 
-
 # ==================================================
-# 8. LẤY ẢNH POSTER DÙNG CHUNG
+# 11. LẤY ẢNH POSTER DÙNG CHUNG
 # ==================================================
 
 def _get_movie_poster_image(movie, poster_data):
     """
     Lấy ảnh poster của phim.
 
-    Sử dụng chung cho:
-        - show_movie_poster()
-        - show_clickable_poster()
-
-    Ưu tiên:
-        1. Poster thật từ TMDb.
-        2. Ảnh mặc định nếu không có poster.
     """
 
     poster_url = get_movie_poster_url(
@@ -448,193 +494,12 @@ def _get_movie_poster_image(movie, poster_data):
 
 
 # ==================================================
-# 9. HIỂN THỊ POSTER PHIM
+# 12. HIỂN THỊ POSTER PHIM
 # ==================================================
 
-def show_movie_poster(
-    movie,
-    poster_data,
-    width=150,
-    *,
-    clickable=False,
-    return_page="home",
-):
-    """
-    Hiển thị poster phim.
+def show_movie_poster(movie, poster_data, width=150, *, clickable=False, return_page="home", key=None):
+    """Hiển thị poster tĩnh; nhấn vào ảnh không thực hiện điều hướng."""
 
-    Parameters:
-        movie:
-            Thông tin phim.
-
-        poster_data:
-            Dữ liệu poster từ TMDb.
-
-        width:
-            Chiều rộng poster.
-
-        clickable:
-            True: Poster có thể nhấn để mở chi tiết phim.
-            False: Chỉ hiển thị poster.
-
-        return_page:
-            Trang quay lại sau khi xem chi tiết.
-
-    Cả hai chế độ đều sử dụng chung cache ảnh.
-    """
-
-    # ------------------------------------------
-    # 1. LẤY ẢNH POSTER
-    # ------------------------------------------
-
-    image = _get_movie_poster_image(
-        movie,
-        poster_data,
-    )
-
-    # ------------------------------------------
-    # 2. XÁC ĐỊNH CHIỀU RỘNG
-    # ------------------------------------------
-
-    image_width = (
-        "stretch"
-        if width is None or width == "content"
-        else width
-    )
-
-    # ------------------------------------------
-    # 3. CHẾ ĐỘ HIỂN THỊ THÔNG THƯỜNG
-    # ------------------------------------------
-
-    if not clickable:
-
-        st.image(
-            image,
-            width=image_width,
-        )
-
-        return
-
-    # ------------------------------------------
-    # 4. CHẾ ĐỘ POSTER CÓ THỂ NHẤN
-    # ------------------------------------------
-
-    movie_id = movie.get("movieId")
-
-    if pd.isna(movie_id):
-        movie_id = movie.get("movie_id")
-
-    try:
-        numeric_id = float(movie_id)
-
-        if (
-            numeric_id <= 0
-            or not numeric_id.is_integer()
-        ):
-            raise ValueError("Movie ID không hợp lệ.")
-
-        movie_id = int(numeric_id)
-
-    except (TypeError, ValueError, OverflowError):
-
-        # Không có ID hợp lệ thì chỉ hiển thị poster
-        st.image(
-            image,
-            width=image_width,
-        )
-
-        return
-
-    # ------------------------------------------
-    # 5. CHUYỂN ẢNH CACHE SANG BASE64
-    # ------------------------------------------
-
-    image_buffer = BytesIO()
-
-    image.save(
-        image_buffer,
-        format="JPEG",
-        quality=90,
-        optimize=True,
-    )
-
-    image_base64 = base64.b64encode(
-        image_buffer.getvalue()
-    ).decode("ascii")
-
-    # ------------------------------------------
-    # 6. TẠO ĐƯỜNG DẪN CHI TIẾT PHIM
-    # ------------------------------------------
-
-    title = html.escape(
-        str(movie.get("title", "phim")),
-        quote=True,
-    )
-
-    query_string = urlencode({
-        "movie_id": movie_id,
-        "return_page": return_page,
-    })
-
-    # ------------------------------------------
-    # 7. XÁC ĐỊNH WIDTH HTML
-    # ------------------------------------------
-
-    if isinstance(width, (int, float)) and not isinstance(width, bool):
-        width_style = f"width:{int(width)}px;"
-    else:
-        width_style = "width:100%;"
-
-    # ------------------------------------------
-    # 8. HIỂN THỊ POSTER DƯỚI DẠNG LIÊN KẾT
-    # ------------------------------------------
-
-    st.html(
-        f"""
-        <a
-            class="home-movie-poster"
-            href="?{query_string}"
-            target="_self"
-            title="Xem chi tiết {title}"
-            style="
-                display:block;
-                {width_style}
-                max-width:100%;
-            "
-        >
-            <img
-                src="data:image/jpeg;base64,{image_base64}"
-                alt="{title}"
-                loading="lazy"
-                decoding="async"
-                style="
-                    display:block;
-                    width:100%;
-                    height:auto;
-                    object-fit:cover;
-                "
-            >
-        </a>
-        """
-    )
-
-
-# ==================================================
-# 10. HIỂN THỊ POSTER CÓ THỂ NHẤN
-# ==================================================
-
-def show_clickable_poster(movie, poster_data):
-    """
-    Hiển thị poster có thể nhấn để mở trang chi tiết.
-
-    Kế thừa toàn bộ logic hiển thị và cache từ
-    show_movie_poster().
-    """
-
-    return show_movie_poster(
-        movie=movie,
-        poster_data=poster_data,
-        width=150,
-        clickable=True,
-        return_page="home",
-    )
-
+    image_width = ("stretch" if width is None or width == "content" else width)
+    alt_text = (str(movie.get("title", "Poster phim")) if movie is not None else "Poster phim")
+    st.image(_get_movie_poster_image(movie, poster_data), width=image_width, alt=alt_text)

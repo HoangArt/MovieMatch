@@ -5,7 +5,8 @@ from pages_ui.auth import show_auth_page
 from pages_ui.data_explorer import show_data_explorer_page
 from pages_ui.favorite_movies import show_favorite_movies_page
 from pages_ui.recommendations import show_recommendations_page
-from pages_ui.movie_detail import show_movie_detail_page
+from pages_ui.rated_movies import show_rated_movies_page
+from pages_ui.movie_detail import show_movie_detail_page, navigate_back
 from src.database import init_db, is_onboarding_completed
 from src.user_ratings import init_ratings_db
 
@@ -42,9 +43,8 @@ elif "movie_id" in st.query_params:
     except (ValueError, TypeError):
         st.error("Đường dẫn phim không hợp lệ.")
 
-        if st.button("Quay lại trang chủ"):
-            st.query_params.clear()
-            st.rerun()
+        if st.button("Quay lại", key="invalid_movie_id_back"):
+            navigate_back()
 
 else:
     # Tạo thanh bên
@@ -70,6 +70,7 @@ else:
             "Tìm kiếm",
             "Gợi ý phim",
             "Phim yêu thích",
+            "Phim đã đánh giá",
             "Thống kê",
         ]
 
@@ -104,6 +105,9 @@ else:
                 user_id=st.session_state.user_id,
                 first_time=False,
             )
+
+        elif page == "Phim đã đánh giá":
+            show_rated_movies_page(st.session_state.user_id)
 
         elif page == "Thống kê":
             show_data_explorer_page()

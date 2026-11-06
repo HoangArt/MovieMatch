@@ -1,26 +1,14 @@
-"""Collaborative-filtering models for MovieMatch.
-
-The models are trained on the public MovieLens ratings. A MovieMatch account is
-NOT treated as a MovieLens user: its own movie ratings are projected onto the
-MovieLens user/item space at recommendation time.
-"""
 from __future__ import annotations
-
 from functools import lru_cache
 from pathlib import Path
 from typing import Mapping, Iterable
 import importlib.util
-
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 from sklearn.decomposition import TruncatedSVD
 from sklearn.neighbors import NearestNeighbors
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATASET_DIR = PROJECT_ROOT / "data" / "ml-latest-small"
-RATINGS_FILE = DATASET_DIR / "ratings.csv"
-MOVIES_FILE = DATASET_DIR / "movies.csv"
+from src.common import MOVIES_FILE, RATINGS_FILE
 
 MODEL_LABELS = {
     "User-based KNN": "user_knn",
@@ -85,14 +73,7 @@ class MovieLensModels:
         self.user_to_idx = {int(v): i for i, v in enumerate(self.user_ids)}
         self.movie_to_idx = {int(v): i for i, v in enumerate(self.movie_ids)}
         self.user_means = self.R.mean(axis=1)
-        self.item_means = self.R.mean(axis=0)
-        self.item_counts = self.R.count(axis=0).astype(float)
         self.global_mean = float(self.ratings["rating"].mean())
-        # Smooth rare-item averages toward the global mean to avoid letting
-        # films with one 5-star rating dominate the fallback ranking.
-        self.item_means_smoothed = (
-            self.item_means * self.item_counts + self.global_mean * 10.0
-        ) / (self.item_counts + 10.0)
 
         centered = self.R.sub(self.user_means, axis=0).fillna(0.0)
         self.user_matrix = csr_matrix(centered.to_numpy(dtype=np.float32))
@@ -139,67 +120,103 @@ class MovieLensModels:
                 values.append(rating)
         return movie_ids, np.asarray(values, dtype=np.float64)
 
-    def _baseline_scores(self, profile_mean: float) -> np.ndarray:
-        item_mean = self.item_means_smoothed.reindex(self.movie_ids).to_numpy(dtype=float)
-        return np.clip(0.60 * profile_mean + 0.40 * item_mean, 0.5, 5.0)
+    def _score_user_knn(
+        self,
+        rated_indices: list[int],
+        values: np.ndarray,
+        k: int,
+        positive_threshold: float = 4.0,
+    ) -> np.ndarray:
+        """
+        Return a neighbor-vote ranking score, not a predicted rating.
 
-    def _score_user_knn(self, rated_indices: list[int], values: np.ndarray, k: int) -> np.ndarray:
+        For each unseen movie, the score is the similarity-weighted share of
+        neighboring users who rated that movie >= positive_threshold.
+        """
         profile_mean = float(values.mean())
         profile_vector = np.zeros(len(self.movie_ids), dtype=np.float32)
         profile_vector[rated_indices] = values - profile_mean
         if np.linalg.norm(profile_vector) < 1e-8:
-            return self._baseline_scores(profile_mean)
+            return np.zeros(len(self.movie_ids), dtype=np.float64)
 
-        n_neighbors = min(max(int(k) + 1, 2), len(self.user_ids))
+        n_neighbors = min(max(int(k), 1), len(self.user_ids))
         distances, indices = self.user_knn.kneighbors(
-            csr_matrix(profile_vector.reshape(1, -1)), n_neighbors=n_neighbors
+            csr_matrix(profile_vector.reshape(1, -1)),
+            n_neighbors=n_neighbors,
         )
         neighbor_indices = indices.ravel()
         similarities = np.clip(1.0 - distances.ravel(), 0.0, None)
 
-        # Discount users with very little overlap with the external profile.
-        overlap = self.R.iloc[neighbor_indices, rated_indices].notna().sum(axis=1).to_numpy()
+        # Discount neighbors that overlap with too few items in this profile.
+        overlap = (
+            self.R.iloc[neighbor_indices, rated_indices]
+            .notna()
+            .sum(axis=1)
+            .to_numpy()
+        )
         similarities *= overlap / (overlap + 5.0)
         keep = (overlap >= 2) & (similarities > 0)
         if not keep.any():
-            return self._baseline_scores(profile_mean)
+            return np.zeros(len(self.movie_ids), dtype=np.float64)
+
         neighbor_indices = neighbor_indices[keep]
         similarities = similarities[keep]
-
         neighbor_ratings = self.R.iloc[neighbor_indices].to_numpy(dtype=float)
-        neighbor_means = self.user_means.iloc[neighbor_indices].to_numpy(dtype=float)[:, None]
-        observed = np.isfinite(neighbor_ratings)
-        deviations = np.where(observed, neighbor_ratings - neighbor_means, 0.0)
-        weights = similarities[:, None] * observed
-        denominator = weights.sum(axis=0)
-        numerator = (weights * deviations).sum(axis=0)
-        fallback = self._baseline_scores(profile_mean)
-        scores = fallback.copy()
-        valid = denominator > 0
-        scores[valid] = profile_mean + numerator[valid] / (denominator[valid] + 0.5)
-        return np.clip(scores, 0.5, 5.0)
 
-    def _score_item_knn(self, rated_indices: list[int], values: np.ndarray, k: int) -> np.ndarray:
-        profile_mean = float(values.mean())
+        observed = np.isfinite(neighbor_ratings)
+        positive = observed & (neighbor_ratings >= float(positive_threshold))
+        positive_weight = (similarities[:, None] * positive).sum(axis=0)
+        observed_weight = (similarities[:, None] * observed).sum(axis=0)
+
+        scores = np.zeros(len(self.movie_ids), dtype=np.float64)
+        valid = observed_weight > 0
+        scores[valid] = positive_weight[valid] / observed_weight[valid]
+        return np.clip(scores, 0.0, 1.0)
+
+    def _score_item_knn(
+        self,
+        rated_indices: list[int],
+        values: np.ndarray,
+        k: int,
+        positive_threshold: float = 4.0,
+    ) -> np.ndarray:
+        """
+        Return a content-free item-neighborhood similarity ranking score.
+
+        Candidate movies are ranked by their weighted mean cosine similarity
+        to the movies this user rated positively. No rating is inferred.
+        """
+        liked_mask = values >= float(positive_threshold)
+        liked_indices = np.asarray(rated_indices, dtype=int)[liked_mask]
+        liked_values = np.asarray(values, dtype=float)[liked_mask]
+        scores = np.full(len(self.movie_ids), np.nan, dtype=np.float64)
+
+        if liked_indices.size == 0:
+            return scores
+
+        # Stronger positive ratings give their liked movies slightly more
+        # influence, while the returned value remains a similarity score.
+        preference_weights = np.maximum(liked_values - 3.0, 0.0)
         numerator = np.zeros(len(self.movie_ids), dtype=np.float64)
         denominator = np.zeros(len(self.movie_ids), dtype=np.float64)
-        n_neighbors = min(max(int(k) + 1, 2), len(self.movie_ids))
 
-        for item_idx, rating in zip(rated_indices, values):
+        n_neighbors = min(max(int(k) + 1, 2), len(self.movie_ids))
+        for item_idx, preference_weight in zip(liked_indices, preference_weights):
             distances, indices = self.item_knn.kneighbors(
-                self.item_matrix[item_idx], n_neighbors=n_neighbors
+                self.item_matrix[item_idx],
+                n_neighbors=n_neighbors,
             )
             similarities = np.clip(1.0 - distances.ravel(), 0.0, None)
+
             for neighbor_idx, similarity in zip(indices.ravel(), similarities):
                 if neighbor_idx == item_idx or similarity <= 0:
                     continue
-                numerator[neighbor_idx] += similarity * (float(rating) - profile_mean)
-                denominator[neighbor_idx] += similarity
+                numerator[neighbor_idx] += similarity * preference_weight
+                denominator[neighbor_idx] += preference_weight
 
-        scores = self._baseline_scores(profile_mean)
         valid = denominator > 0
-        scores[valid] = profile_mean + numerator[valid] / (denominator[valid] + 0.5)
-        return np.clip(scores, 0.5, 5.0)
+        scores[valid] = numerator[valid] / denominator[valid]
+        return np.clip(scores, 0.0, 1.0)
 
     def _score_truncated_svd(self, rated_indices: list[int], values: np.ndarray, reg: float = 0.5) -> np.ndarray:
         profile_mean = float(values.mean())
@@ -284,8 +301,6 @@ class MovieLensModels:
         selected_vectors = movie_embeddings[np.asarray(rated_indices, dtype=int)]
         target = values - float(assets["global_mean"]) - movie_bias[np.asarray(rated_indices, dtype=int)]
 
-        # Infer a temporary embedding + bias for this MovieMatch account using
-        # ridge regression; it does not occupy/reuse any MovieLens user ID.
         design = np.column_stack([selected_vectors, np.ones(len(selected_vectors))])
         reg = np.eye(design.shape[1], dtype=np.float64) * 0.1
         reg[-1, -1] = 1e-6
@@ -308,7 +323,12 @@ class MovieLensModels:
         top_k: int = 12,
         k: int = 20,
     ) -> pd.DataFrame:
-        """Rank unseen movies for an external account's {movieId: rating} profile."""
+        """
+        Recommend unseen movies for an external account's {movieId: rating} profile.
+
+        KNN methods return a recommendation/similarity score for ranking only.
+        SVD and Keras Embedding return predicted_rating estimates.
+        """
         profile_ids, values = self._normalize_profile(profile_ratings)
         if len(profile_ids) < 2:
             raise ValueError("Cần ít nhất 2 điểm đánh giá hợp lệ để dùng lọc cộng tác.")
@@ -323,6 +343,7 @@ class MovieLensModels:
         known_values = np.asarray([value for _, value in known], dtype=np.float64)
 
         method = MODEL_LABELS.get(model, model)
+        is_knn = method in {"user_knn", "item_knn"}
         if method == "user_knn":
             scores = self._score_user_knn(rated_indices, known_values, k)
         elif method == "item_knn":
@@ -339,13 +360,20 @@ class MovieLensModels:
         rows = []
         for movie_id, score in zip(self.movie_ids, scores):
             movie_id = int(movie_id)
-            if movie_id in excluded:
+            score = float(score)
+            if movie_id in excluded or not np.isfinite(score):
                 continue
-            rows.append((movie_id, float(score)))
-        if not rows:
-            return pd.DataFrame(columns=["movieId", "title", "genres", "predicted_rating"])
+            # A KNN recommendation must have positive neighbor support/similarity.
+            if is_knn and score <= 0:
+                continue
+            rows.append((movie_id, score))
 
-        ranked = pd.DataFrame(rows, columns=["movieId", "predicted_rating"])
+        score_column = "recommendation_score" if is_knn else "predicted_rating"
+        empty_columns = ["movieId", "title", "genres", score_column]
+        if not rows:
+            return pd.DataFrame(columns=empty_columns)
+
+        ranked = pd.DataFrame(rows, columns=["movieId", score_column])
         ranked = ranked.merge(
             self.movies[["movieId", "title", "genres"]].drop_duplicates("movieId"),
             on="movieId", how="left",
@@ -353,7 +381,7 @@ class MovieLensModels:
         ranked["title"] = ranked["title"].fillna(ranked["movieId"].astype(str))
         ranked["genres"] = ranked["genres"].fillna("")
         ranked = ranked.sort_values(
-            ["predicted_rating", "title"], ascending=[False, True]
+            [score_column, "title"], ascending=[False, True]
         ).head(max(1, int(top_k)))
         return ranked.reset_index(drop=True)
 

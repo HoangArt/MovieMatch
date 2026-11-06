@@ -13,6 +13,7 @@ MAIN_PAGES = [
     "Tìm kiếm",
     "Gợi ý phim",
     "Phim yêu thích",
+    "Phim đã đánh giá",
     "Thống kê",
 ]
 
@@ -221,6 +222,7 @@ def get_return_page():
         "recommendations": "Gợi ý phim",
         "favorite_movies": "Phim yêu thích",
         "favorites": "Phim yêu thích",
+        "rated_movies": "Phim đã đánh giá",
         "stats": "Thống kê",
     }
 
@@ -283,9 +285,8 @@ def show_movie_detail_page(movie_id):
 
     if movie_rows.empty:
         st.error("Không tìm thấy bộ phim này.")
-        if st.button("Quay lại trang chủ", key="movie_not_found_back"):
-            st.query_params.clear()
-            st.rerun()
+        if st.button("Quay lại", key="movie_not_found_back"):
+            navigate_back()
         return
 
     movie = movie_rows.iloc[0]

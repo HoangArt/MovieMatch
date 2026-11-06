@@ -5,6 +5,7 @@ import zipfile
 import requests
 from pathlib import Path
 from io import BytesIO
+from pages_ui.movie_display import navigate_to_movie_detail
 
 # ==========================================
 # 1. ĐƯỜNG DẪN DỮ LIỆU
@@ -384,15 +385,27 @@ def shorten_text(text, max_chars=20):
 # 10. HIỂN THỊ THÔNG TIN CHI TIẾT PHIM
 # ==========================================
 def open_movie_detail(movie_id):
-    """Lưu phim được chọn và chuyển sang trang chi tiết."""
+    """
+    Chuyển đến trang chi tiết phim.
+
+    Sử dụng chung cơ chế điều hướng với các trang khác.
+    """
+
     current_page = st.session_state.get("displayed_page")
-    if current_page not in {
-        "Trang chủ", "Tìm kiếm", "Gợi ý phim", "Phim yêu thích", "Thống kê", "Thiết lập sở thích"
-    }:
+
+    valid_pages = {
+        "Trang chủ",
+        "Tìm kiếm",
+        "Gợi ý phim",
+        "Phim yêu thích",
+        "Phim đã đánh giá",
+        "Thống kê",
+    }
+
+    if current_page not in valid_pages:
         current_page = st.session_state.get("main_navigation", "Trang chủ")
-    st.session_state["return_page"] = current_page
-    st.session_state["selected_movie"] = str(int(movie_id))
-    st.rerun()
+
+    navigate_to_movie_detail(movie_id, return_page=current_page)
 
 
 # =========================================
