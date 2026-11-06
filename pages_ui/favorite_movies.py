@@ -1,24 +1,9 @@
 import pandas as pd
 import streamlit as st
 
-from src.common import (
-    context,
-    enrich,
-    GENRE_TRANSLATIONS,
-    translate_genres,
-    shorten_text,
-)
-
-from pages_ui.movie_display import (
-    load_poster_data,
-    show_movie_poster,
-)
-
-from src.database import (
-    get_user_favorite_movie_ids,
-    mark_onboarding_completed,
-    save_user_favorite_movies,
-)
+from src.common import context, enrich, GENRE_TRANSLATIONS, translate_genres, shorten_text
+from pages_ui.movie_display import load_poster_data, show_movie_poster, navigate_to_movie_detail
+from src.database import get_user_favorite_movie_ids, mark_onboarding_completed, save_user_favorite_movies
 
 
 MIN_FAVORITES = 3
@@ -128,29 +113,24 @@ def show_favorite_movies_page(user_id, first_time=False):
 
             for _, movie in selected_data.iterrows():
 
-                col1, col2, col3 = st.columns([1, 7, 1.5])
+                col1, col2, col3, col4 = st.columns([1, 5, 2, 1.5])
 
                 with col1:
-                    show_movie_poster(
-                        movie, posters, width=65
-                    )
+                    show_movie_poster(movie, posters, width=65)
 
                 with col2:
                     st.write(f"**{movie['title']}**")
-                    st.caption(
-                        translate_genres(movie["genres"])
-                    )
+                    st.caption(translate_genres(movie["genres"]))
 
                 with col3:
-                    if st.button(
-                        "Bỏ chọn",
-                        key=f"remove_{user_id}_{movie['movieId']}",
-                        width="stretch",
-                    ):
-                        _toggle_movie(
-                            selection_key,
-                            movie["movieId"],
-                        )
+                    movie_id = int(movie["movieId"])
+
+                    if st.button("Xem chi tiết", key=f"selected_favorite_detail_{user_id}_{movie_id}", width="stretch"):
+                        navigate_to_movie_detail(movie_id, return_page="favorite_movies")
+
+                with col4:
+                    if st.button("Bỏ chọn", key=f"remove_{user_id}_{movie['movieId']}", width="stretch"):
+                        _toggle_movie(selection_key, movie["movieId"])
                         st.rerun()
 
     else:
@@ -234,29 +214,16 @@ def show_favorite_movies_page(user_id, first_time=False):
         posters = load_poster_data(displayed)
         columns = st.columns(3)
 
-        for index, (_, movie) in enumerate(
-            displayed.iterrows()
-        ):
-
+        for index, (_, movie) in enumerate(displayed.iterrows()):
             movie_id = int(movie["movieId"])
 
             with columns[index % 3]:
                 with st.container(border=True):
+                    show_movie_poster(movie, posters, width="content")
 
-                    show_movie_poster(
-                        movie, posters, width="content"
-                    )
+                    st.write(f"**{shorten_text(movie['title'], max_chars=40)}**")
 
-                    st.write(
-                        f"**{shorten_text(movie['title'], max_chars=40)}**"
-                    )
-
-                    st.caption(
-                        shorten_text(
-                            translate_genres(movie["genres"]),
-                            max_chars=50,
-                        )
-                    )
+                    st.caption(shorten_text(translate_genres(movie["genres"]), max_chars=50))
 
                     rating = movie.get("mean")
                     count = movie.get("count", 0)
@@ -277,21 +244,19 @@ def show_favorite_movies_page(user_id, first_time=False):
 
                     is_selected = movie_id in selected_set
 
-                    label = (
-                        "✓ Đã chọn · Bỏ chọn"
-                        if is_selected
-                        else "+ Thêm vào yêu thích"
-                    )
+                    label = ("Đã chọn · Bỏ chọn" if is_selected else "+ Thêm vào yêu thích")
+                    detail_col, toggle_col = st.columns(2)
 
-                    if st.button(
-                        label,
-                        key=f"toggle_{user_id}_{movie_id}",
-                        width="stretch",
-                    ):
-                        _toggle_movie(
-                            selection_key, movie_id
-                        )
-                        st.rerun()
+                    # Nút xem chi tiết
+                    with detail_col:
+                        if st.button("Xem chi tiết", key=f"favorite_detail_{user_id}_{movie_id}", width="stretch"):
+                            navigate_to_movie_detail(movie_id, return_page="favorite_movies")
+
+                    # Nút thêm hoặc bỏ chọn
+                    with toggle_col:
+                        if st.button(label, key=f"toggle_{user_id}_{movie_id}", width="stretch"):
+                            _toggle_movie(selection_key, movie_id)
+                            st.rerun()
 
     # ======================================
     # LƯU VÀ CHUYỂN SANG TRANG GỢI Ý

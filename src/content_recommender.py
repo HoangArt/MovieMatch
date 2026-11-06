@@ -65,7 +65,7 @@ def load_content_index():
     return movies, tfidf_matrix, movie_to_idx
 
 
-def recommend_by_favorite_movies(favorite_movie_ids, top_k=12):
+def recommend_by_favorite_movies(favorite_movie_ids, top_k=12, exclude_movie_ids=None):
     """Xếp hạng phim chưa chọn theo cosine similarity hồ sơ TF-IDF."""
     movies, tfidf_matrix, movie_to_idx = load_content_index()
 
@@ -74,6 +74,7 @@ def recommend_by_favorite_movies(favorite_movie_ids, top_k=12):
         for movie_id in favorite_movie_ids
         if int(movie_id) in movie_to_idx
     ]
+
     if not valid_ids:
         return pd.DataFrame(columns=["movieId", "title", "genres", "similarity"])
 
@@ -82,13 +83,16 @@ def recommend_by_favorite_movies(favorite_movie_ids, top_k=12):
     user_profile = np.asarray(tfidf_matrix[favorite_indices].mean(axis=0))
     similarities = cosine_similarity(user_profile, tfidf_matrix).ravel()
 
-    # Không đề xuất lại chính các phim người dùng đã đánh dấu yêu thích.
-    for movie_id in valid_ids:
-        similarities[movie_to_idx[movie_id]] = -1.0
+    excluded_ids = {int(movie_id) for movie_id in (exclude_movie_ids or [])}
+    excluded_ids.update(valid_ids)
 
     result = movies[["movieId", "title", "genres"]].copy()
     result["similarity"] = similarities
-    result = result[result["similarity"] >= 0]
+
+    # Loại phim không hợp lệ và phim người dùng đã xem/đánh giá
+    result = result[(result["similarity"] >= 0) & (~result["movieId"].isin(excluded_ids))]
+
+    # Sắp xếp trước, sau đó mới giới hạn số lượng
     result = result.sort_values(
         by=["similarity", "title"],
         ascending=[False, True],

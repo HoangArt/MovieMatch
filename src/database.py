@@ -86,7 +86,7 @@ def hash_password(password, salt):
 
 def register_user(username, email, password):
     """Tạo tài khoản mới; chỉ lưu salt và mật khẩu đã băm."""
-    username = username.strip().lower()
+    username = username.strip()
     email = email.strip().lower()
     salt = secrets.token_bytes(16)
     password_hash = hash_password(password, salt)
@@ -107,7 +107,7 @@ def register_user(username, email, password):
 
 def authenticate_user(username, password):
     """Xác thực tài khoản và trả về thông tin cần dùng trong session."""
-    username = username.strip().lower()
+    username = username.strip()
     with db_connection() as conn:
         user = conn.execute(
             """

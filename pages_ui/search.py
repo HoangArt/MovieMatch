@@ -1,19 +1,11 @@
 import pandas as pd
 import streamlit as st
 
-from pages_ui.movie_display import load_poster_data, show_movie_poster
+from pages_ui.movie_display import load_poster_data, show_movie_poster, navigate_to_movie_detail
 from src.common import context, enrich, GENRE_TRANSLATIONS, format_movie_title, shorten_text, translate_genres
 
 
 PAGE_SIZE = 24
-
-
-def _open_movie_detail(movie_id):
-    """Chuyển sang trang chi tiết và ghi nhớ trang tìm kiếm."""
-    st.query_params["movie_id"] = str(int(movie_id))
-    st.query_params["return_page"] = "search"
-    st.rerun()
-
 
 def show_search_results(movies, poster_data, *, key_prefix="search"):
     """Hiển thị kết quả dạng lưới, kèm điểm và nút xem chi tiết."""
@@ -45,9 +37,7 @@ def show_search_results(movies, poster_data, *, key_prefix="search"):
                         st.caption("Chưa có đánh giá")
 
                     if st.button("Xem chi tiết", key=f"{key_prefix}_detail_{movie_id}", width="stretch"):
-                        st.query_params["movie_id"] = str(movie_id)
-                        st.query_params["return_page"] = "Tìm kiếm"
-                        _open_movie_detail(movie_id)
+                        navigate_to_movie_detail(movie_id, return_page="search")
 
 
 def show_search():
@@ -63,11 +53,7 @@ def show_search():
             st.exception(error)
         return
 
-    query = st.text_input(
-        "Tìm kiếm phim",
-        placeholder="Nhập tên phim bạn muốn tìm...",
-        key="search",
-    )
+    query = st.text_input("Tìm kiếm phim", placeholder="Nhập tên phim bạn muốn tìm...", key="search")
 
     genres = sorted({
         genre
@@ -80,10 +66,7 @@ def show_search():
         col_genre, col_sort = st.columns(2)
 
         with col_genre:
-            genre = st.selectbox(
-                "Thể loại",
-                ["Tất cả"] + genres,
-                format_func=lambda value: (
+            genre = st.selectbox("Thể loại", ["Tất cả"] + genres, format_func=lambda value: (
                     "Tất cả thể loại"
                     if value == "Tất cả"
                     else GENRE_TRANSLATIONS.get(value, value)
@@ -105,8 +88,7 @@ def show_search():
             )
 
     if query.strip():
-        df = df[
-            df["title"].str.contains(
+        df = df[df["title"].str.contains(
                 query.strip(),
                 case=False,
                 regex=False,
@@ -158,7 +140,7 @@ def show_search():
     show_search_results(displayed, poster_data)
 
     if visible_count < len(df):
-        if st.button("⬇ Tải thêm 24 phim", width="stretch"):
+        if st.button("Tải thêm 24 phim", width="stretch"):
             st.session_state["search_visible_movies"] = min(
                 visible_count + PAGE_SIZE,
                 len(df),
