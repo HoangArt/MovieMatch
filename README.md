@@ -172,7 +172,7 @@ Trên trang **Gợi ý phim**, người dùng có thể chọn một trong các 
 
 - Mã nguồn: `src/recommender_models.py`.
 - Huấn luyện lớp embedding cho người dùng và phim cùng các bias để dự đoán điểm đánh giá từ dữ liệu MovieLens.
-- Mô hình này cần TensorFlow và chỉ huấn luyện khi người dùng chọn; có thể mất thêm thời gian ở lần sử dụng đầu tiên. Cài phần phụ thuộc tùy chọn bằng `pip install -r requirements-optional-keras.txt`.
+- Mô hình này cần TensorFlow và chỉ huấn luyện khi người dùng chọn; có thể mất thêm thời gian ở lần sử dụng đầu tiên.
 
 **Cách kết hợp dữ liệu:** các mô hình cộng tác được xây dựng từ lịch sử đánh giá MovieLens. Điểm đánh giá do tài khoản CinaMatch tạo ra được lưu riêng theo tài khoản, sau đó dùng làm hồ sơ để xếp hạng phim. `user_id` của website không được xem là `userId` trong MovieLens.
 

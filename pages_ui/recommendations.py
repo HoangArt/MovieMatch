@@ -177,8 +177,7 @@ def show_recommendations_page(user_id):
     )
     if not tensorflow_available():
         st.info(
-            "Keras Embedding cần cài TensorFlow: "
-            "pip install -r requirements-optional-keras.txt"
+            "Chưa có TensorFlow."
         )
 
     movies, ratings, _ = context()
@@ -211,8 +210,7 @@ def show_recommendations_page(user_id):
         try:
             if selected_model == "Keras Embedding" and not tensorflow_available():
                 raise RuntimeError(
-                    "Keras Embedding cần TensorFlow. Cài bằng: "
-                    "pip install -r requirements-optional-keras.txt"
+                    "Chưa có TensorFlow."
                 )
 
             recommender = load_movielens_models()

@@ -253,8 +253,7 @@ class MovieLensModels:
             from keras import layers
         except ImportError as exc:
             raise RuntimeError(
-                "Keras Embedding cần TensorFlow. Cài bằng: "
-                "pip install -r requirements-optional-keras.txt"
+                "Chưa có TensorFlow."
             ) from exc
 
         tf.keras.utils.set_random_seed(69)
