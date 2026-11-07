@@ -166,6 +166,10 @@ def _build_rated_movies(username):
 
     return rated_movies.reset_index(drop=True)
 
+def _navigate_to_search():
+    """Chuyển trang sang Tìm kiếm."""
+    st.session_state["main_navigation"] = "Tìm kiếm"
+
 
 def show_rated_movies_page(user_id):
     """Hiển thị danh sách phim và điểm mà tài khoản hiện tại đã đánh giá."""
@@ -189,9 +193,7 @@ def show_rated_movies_page(user_id):
             "Bạn chưa đánh giá phim nào. Hãy tìm một bộ phim, mở trang chi tiết "
             "và gửi đánh giá đầu tiên để danh sách xuất hiện tại đây."
         )
-        if st.button("Khám phá phim", key=f"rated_movies_explore_{user_id}"):
-            st.session_state["main_navigation"] = "Tìm kiếm"
-            st.rerun()
+        st.button("Khám phá phim", key=f"rated_movies_explore_{user_id}", on_click=_navigate_to_search, width="stretch")
         return
 
     average_rating = float(rated_movies["rating"].mean())

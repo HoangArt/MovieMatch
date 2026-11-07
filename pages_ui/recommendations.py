@@ -131,7 +131,6 @@ def _render_load_more(user_id, section, state_key, total_count, visible_count):
 
 
 def show_recommendations_page(user_id):
-    """Show content-based cold-start or collaborative recommendations."""
     if st.session_state.pop("scroll_to_top", False):
         st.iframe(
             """
@@ -143,7 +142,7 @@ def show_recommendations_page(user_id):
                 window.parent.scrollTo(0, 0);
             </script>
             """,
-            height=0,
+            height=1,
         )
 
     st.title("Gợi ý phim dành cho bạn")
