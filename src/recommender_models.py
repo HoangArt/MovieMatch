@@ -10,6 +10,8 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.neighbors import NearestNeighbors
 from src.common import MOVIES_FILE, RATINGS_FILE
 
+# Ánh xạ tên mô hình hiển thị trên giao diện sang mã nội bộ.
+# Nhờ đó hàm recommend() có thể nhận cả tên thân thiện lẫn mã kỹ thuật.
 MODEL_LABELS = {
     "User-based KNN": "user_knn",
     "Item-based KNN": "item_knn",
@@ -19,13 +21,13 @@ MODEL_LABELS = {
 
 
 def tensorflow_available() -> bool:
-    """Return whether TensorFlow is importable in the current environment."""
+    # Kiểm tra TensorFlow đã được cài hay chưa mà không cần import toàn bộ thư viện.
     return importlib.util.find_spec("tensorflow") is not None
 
 
 class MovieLensModels:
-    """Fit collaborative models once and personalize them for an external user."""
-
+    # Lớp quản lý dữ liệu MovieLens, huấn luyện các mô hình lọc cộng tác
+    # và tạo danh sách phim gợi ý cho một hồ sơ đánh giá đầu vào.
     def __init__(
         self,
         ratings: pd.DataFrame,
@@ -33,6 +35,9 @@ class MovieLensModels:
         n_components: int = 50,
         random_state: int = 69,
     ) -> None:
+        # Kiểm tra những cột tối thiểu bắt buộc phải có trong ratings.csv.
+        # Mỗi dòng rating cần xác định người dùng, bộ phim và số sao đánh giá.
+
         required = {"userId", "movieId", "rating"}
         missing = required.difference(ratings.columns)
         if missing:
@@ -40,18 +45,28 @@ class MovieLensModels:
         if "movieId" not in movies.columns:
             raise ValueError("movies.csv cần có cột movieId.")
 
+        # Chỉ lấy 3 cột cần thiết, tránh làm thay đổi DataFrame gốc.
         clean = ratings[["userId", "movieId", "rating"]].copy()
+
+        # Ép dữ liệu về dạng số; giá trị không chuyển đổi được sẽ thành NaN.
         for column in ("userId", "movieId", "rating"):
             clean[column] = pd.to_numeric(clean[column], errors="coerce")
+        # Loại các dòng thiếu hoặc sai dữ liệu sau bước chuyển kiểu.
         clean = clean.dropna().copy()
         clean["userId"] = clean["userId"].astype(int)
         clean["movieId"] = clean["movieId"].astype(int)
         clean["rating"] = clean["rating"].astype(float)
+
+        # Mỗi người dùng chỉ giữ một đánh giá cho một phim.
+        # Nếu có bản ghi trùng, giữ bản ghi xuất hiện cuối cùng trong file.
         clean = clean.drop_duplicates(["userId", "movieId"], keep="last")
         if clean.empty:
             raise ValueError("Không có rating hợp lệ để huấn luyện mô hình.")
 
+        # Lưu dữ liệu đánh giá đã làm sạch và chuẩn hóa chỉ số dòng.
         self.ratings = clean.reset_index(drop=True)
+        # Chuẩn hóa bảng thông tin phim để có thể ghép tên và thể loại
+        # vào kết quả gợi ý ở cuối quy trình.
         self.movies = movies.copy()
         self.movies["movieId"] = pd.to_numeric(
             self.movies["movieId"], errors="coerce"
@@ -97,6 +112,7 @@ class MovieLensModels:
 
     @classmethod
     def from_csv(cls) -> "MovieLensModels":
+        # Hàm tiện ích: đọc hai tệp MovieLens từ đường dẫn cấu hình rồi khởi tạo lớp.
         if not RATINGS_FILE.exists() or not MOVIES_FILE.exists():
             raise FileNotFoundError(
                 "Không tìm thấy MovieLens. Cần có data/ml-latest-small/ratings.csv "
@@ -106,6 +122,8 @@ class MovieLensModels:
 
     @staticmethod
     def _normalize_profile(profile_ratings: Mapping[int, float]) -> tuple[list[int], np.ndarray]:
+        # Làm sạch hồ sơ đánh giá do người dùng cung cấp.
+        # Đầu vào có dạng {movieId: rating}; đầu ra gồm danh sách ID và mảng điểm.
         if not isinstance(profile_ratings, Mapping):
             raise TypeError("profile_ratings phải là dict {movieId: rating}.")
         movie_ids: list[int] = []
@@ -127,12 +145,8 @@ class MovieLensModels:
         k: int,
         positive_threshold: float = 4.0,
     ) -> np.ndarray:
-        """
-        Return a neighbor-vote ranking score, not a predicted rating.
-
-        For each unseen movie, the score is the similarity-weighted share of
-        neighboring users who rated that movie >= positive_threshold.
-        """
+        # Trừ điểm trung bình hồ sơ để tập trung vào xu hướng thích/không thích
+        # tương đối của người dùng thay vì mức chấm điểm cao/thấp nói chung.
         profile_mean = float(values.mean())
         profile_vector = np.zeros(len(self.movie_ids), dtype=np.float32)
         profile_vector[rated_indices] = values - profile_mean
@@ -147,7 +161,6 @@ class MovieLensModels:
         neighbor_indices = indices.ravel()
         similarities = np.clip(1.0 - distances.ravel(), 0.0, None)
 
-        # Discount neighbors that overlap with too few items in this profile.
         overlap = (
             self.R.iloc[neighbor_indices, rated_indices]
             .notna()
@@ -180,12 +193,7 @@ class MovieLensModels:
         k: int,
         positive_threshold: float = 4.0,
     ) -> np.ndarray:
-        """
-        Return a content-free item-neighborhood similarity ranking score.
-
-        Candidate movies are ranked by their weighted mean cosine similarity
-        to the movies this user rated positively. No rating is inferred.
-        """
+        # Chỉ sử dụng các phim được người dùng đánh giá từ ngưỡng yêu thích trở lên.
         liked_mask = values >= float(positive_threshold)
         liked_indices = np.asarray(rated_indices, dtype=int)[liked_mask]
         liked_values = np.asarray(values, dtype=float)[liked_mask]
@@ -194,8 +202,6 @@ class MovieLensModels:
         if liked_indices.size == 0:
             return scores
 
-        # Stronger positive ratings give their liked movies slightly more
-        # influence, while the returned value remains a similarity score.
         preference_weights = np.maximum(liked_values - 3.0, 0.0)
         numerator = np.zeros(len(self.movie_ids), dtype=np.float64)
         denominator = np.zeros(len(self.movie_ids), dtype=np.float64)
@@ -219,6 +225,10 @@ class MovieLensModels:
         return np.clip(scores, 0.0, 1.0)
 
     def _score_truncated_svd(self, rated_indices: list[int], values: np.ndarray, reg: float = 0.5) -> np.ndarray:
+        # TRUNCATED SVD:
+        # Dùng các vector tiềm ẩn của phim đã đánh giá để ước lượng vector sở thích
+        # của người dùng hiện tại, rồi dự đoán điểm cho tất cả phim.
+        
         profile_mean = float(values.mean())
         item_vectors = self.item_factors[np.asarray(rated_indices, dtype=int)]
         target = values - profile_mean
@@ -231,6 +241,11 @@ class MovieLensModels:
         return np.clip(scores, 0.5, 5.0)
 
     def _fit_keras_assets(self, epochs: int = 12) -> dict:
+        # HUẤN LUYỆN KERAS EMBEDDING:
+        # Mỗi user/phim được biểu diễn bằng vector embedding; tích vô hướng
+        # cùng các hệ số bias được dùng để dự đoán điểm đánh giá.
+        # Kết quả được lưu trong _keras_assets để không huấn luyện lặp lại.
+        
         if self._keras_assets is not None:
             return self._keras_assets
         try:
@@ -294,6 +309,11 @@ class MovieLensModels:
         return self._keras_assets
 
     def _score_keras_embedding(self, rated_indices: list[int], values: np.ndarray) -> np.ndarray:
+        # SUY LUẬN KERAS EMBEDDING CHO NGƯỜI DÙNG MỚI:
+        # Mạng đã học embedding phim và bias phim. Từ các phim người dùng mới
+        # đã chấm, giải bài toán bình phương tối thiểu để ước lượng embedding
+        # và bias của người dùng đó, sau đó dự đoán điểm cho toàn bộ phim.
+        
         assets = self._fit_keras_assets()
         profile_mean = float(values.mean())
         movie_embeddings = assets["movie_embeddings"]
@@ -323,12 +343,9 @@ class MovieLensModels:
         top_k: int = 12,
         k: int = 20,
     ) -> pd.DataFrame:
-        """
-        Recommend unseen movies for an external account's {movieId: rating} profile.
-
-        KNN methods return a recommendation/similarity score for ranking only.
-        SVD and Keras Embedding return predicted_rating estimates.
-        """
+        # HÀM ĐIỀU PHỐI GỢI Ý PHIM:
+        # Nhận hồ sơ {movieId: rating}, chọn thuật toán, tính điểm cho các phim
+        # ứng viên, loại phim đã xem/đã đánh giá và trả về top_k phim tốt nhất.
         profile_ids, values = self._normalize_profile(profile_ratings)
         if len(profile_ids) < 2:
             raise ValueError("Cần ít nhất 2 điểm đánh giá hợp lệ để dùng lọc cộng tác.")
@@ -363,7 +380,7 @@ class MovieLensModels:
             score = float(score)
             if movie_id in excluded or not np.isfinite(score):
                 continue
-            # A KNN recommendation must have positive neighbor support/similarity.
+
             if is_knn and score <= 0:
                 continue
             rows.append((movie_id, score))
@@ -387,6 +404,7 @@ class MovieLensModels:
 
 
 def _build_models() -> MovieLensModels:
+    # Hàm tạo mô hình mặc định từ các tệp dữ liệu MovieLens.
     return MovieLensModels.from_csv()
 
 

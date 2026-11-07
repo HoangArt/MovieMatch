@@ -5,6 +5,14 @@ VALID_RATINGS = tuple(value / 2 for value in range(1, 11))
 
 """Lưu và truy vấn điểm đánh giá do người dùng MovieMatch gửi."""
 
+def clean_username(username):
+    """Chuẩn hóa khoảng trắng nhưng giữ nguyên chữ hoa/thường."""
+    if username is None:
+        return None
+
+    username = str(username).strip()
+    return username or None
+
 def init_ratings_db():
     """Tạo bảng đánh giá trong cùng SQLite database của ứng dụng."""
     with db_connection() as conn:
@@ -31,11 +39,12 @@ def init_ratings_db():
 
 
 def save_user_rating(username, movie_id, rating):
-    """Lưu mới hoặc cập nhật điểm của một người dùng cho một phim."""
-    if not username or not str(username).strip():
+    """Lưu mới hoặc cập nhật điểm đánh giá của người dùng."""
+    username = clean_username(username)
+
+    if not username:
         raise ValueError("Bạn cần đăng nhập để đánh giá.")
 
-    username = str(username).strip().lower()
     movie_id = int(movie_id)
     rating = float(rating)
 
@@ -47,6 +56,26 @@ def save_user_rating(username, movie_id, rating):
     now = datetime.now(timezone.utc).isoformat()
 
     with db_connection() as conn:
+
+        # Kiểm tra tài khoản tồn tại và lấy đúng username trong database.
+        user = conn.execute(
+            """
+            SELECT username
+            FROM users
+            WHERE username = ?
+            """,
+            (username,),
+        ).fetchone()
+
+        if user is None:
+            raise ValueError(
+                "Không tìm thấy tài khoản trong database. "
+                "Vui lòng đăng xuất và đăng nhập lại."
+            )
+
+        # Giữ nguyên username thực tế trong bảng users.
+        username = user["username"]
+
         conn.execute(
             """
             INSERT INTO user_ratings (
@@ -63,7 +92,9 @@ def save_user_rating(username, movie_id, rating):
 
 
 def get_user_rating(username, movie_id):
-    """Lấy điểm mà người dùng hiện tại đã chấm cho một phim."""
+    """Lấy điểm mà người dùng đã chấm cho một phim."""
+    username = clean_username(username)
+
     if not username:
         return None
 
@@ -74,7 +105,7 @@ def get_user_rating(username, movie_id):
             FROM user_ratings
             WHERE username = ? AND movie_id = ?
             """,
-            (str(username).strip().lower(), int(movie_id)),
+            (username, int(movie_id)),
         ).fetchone()
 
     return float(row["rating"]) if row else None
@@ -82,6 +113,8 @@ def get_user_rating(username, movie_id):
 
 def get_user_ratings(username):
     """Lấy toàn bộ phim người dùng đã chấm, mới cập nhật trước."""
+    username = clean_username(username)
+
     if not username:
         return []
 
@@ -93,7 +126,7 @@ def get_user_ratings(username):
             WHERE username = ?
             ORDER BY updated_at DESC
             """,
-            (str(username).strip().lower(),),
+            (username,),
         ).fetchall()
 
     return [dict(row) for row in rows]
@@ -101,6 +134,8 @@ def get_user_ratings(username):
 
 def delete_user_rating(username, movie_id):
     """Xóa điểm đánh giá của người dùng cho một phim."""
+    username = clean_username(username)
+
     if not username:
         return
 
@@ -110,7 +145,7 @@ def delete_user_rating(username, movie_id):
             DELETE FROM user_ratings
             WHERE username = ? AND movie_id = ?
             """,
-            (str(username).strip().lower(), int(movie_id)),
+            (username, int(movie_id)),
         )
 
 
@@ -119,7 +154,9 @@ def get_community_rating(movie_id):
     with db_connection() as conn:
         row = conn.execute(
             """
-            SELECT AVG(rating) AS average_rating, COUNT(*) AS rating_count
+            SELECT
+                AVG(rating) AS average_rating,
+                COUNT(*) AS rating_count
             FROM user_ratings
             WHERE movie_id = ?
             """,
